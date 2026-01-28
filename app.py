@@ -1,6 +1,10 @@
 """
 Peptide Tracker Web Application
 Flask web interface with session-based auth and tier support
+
+Fixes:
+- Ensure users.tier exists in Postgres (startup-safe migration)
+- Inject current_user + has_endpoint + tier_at_least into Jinja
 """
 
 from __future__ import annotations
@@ -23,45 +27,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
 # -------------------------
-# DB init
-# -------------------------
-db_url = Config.DATABASE_URL
-engine = create_engine(db_url)
-
-def ensure_users_tier_column(engine):
-    """
-    Render is running Postgres (psycopg2). Your existing users table was created before `tier` existed,
-    so SELECTs fail until we add the column. This is a safe startup migration.
-    """
-    try:
-        dialect = (engine.dialect.name or "").lower()
-        if dialect.startswith("postgres"):
-            with engine.begin() as conn:
-                conn.execute(
-                    text("ALTER TABLE users ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'free';")
-                )
-        elif dialect.startswith("sqlite"):
-            with engine.begin() as conn:
-                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(users);")).fetchall()]
-                if "tier" not in cols:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
-        else:
-            # best-effort fallback
-            with engine.begin() as conn:
-                try:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
-                except Exception:
-                    pass
-    except Exception as e:
-        # Do not crash the whole app on migration attempts; log and continue
-        print(f"Warning: could not ensure users.tier column: {e}")
-
-# IMPORTANT: run migration BEFORE create_all and before any queries
-ensure_users_tier_column(engine)
-ModelBase.metadata.create_all(engine)
-
-# -------------------------
-# User model
+# User model (must be defined BEFORE create_all)
 # -------------------------
 class User(ModelBase):
     __tablename__ = "users"
@@ -78,6 +44,44 @@ class User(ModelBase):
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
+
+# -------------------------
+# DB init
+# -------------------------
+db_url = Config.DATABASE_URL
+engine = create_engine(db_url)
+
+def ensure_users_tier_column(engine):
+    """
+    Your existing Postgres 'users' table was created before `tier` existed.
+    This adds the column safely at startup.
+    """
+    try:
+        dialect = (engine.dialect.name or "").lower()
+        if dialect.startswith("postgres"):
+            with engine.begin() as conn:
+                # IF EXISTS avoids failure if table isn't there yet
+                conn.execute(
+                    text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'free';")
+                )
+        elif dialect.startswith("sqlite"):
+            with engine.begin() as conn:
+                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(users);")).fetchall()]
+                if "tier" not in cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
+        else:
+            with engine.begin() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
+                except Exception:
+                    pass
+    except Exception as e:
+        # Do not crash the whole app on migration attempts; log and continue
+        print(f"Warning: could not ensure users.tier column: {e}")
+
+# Create tables first (including users if missing), then ensure tier exists on legacy tables
+ModelBase.metadata.create_all(engine)
+ensure_users_tier_column(engine)
 
 # -------------------------
 # Tier helpers
@@ -224,6 +228,7 @@ def dashboard():
 def peptides():
     return render_template("peptides.html")
 
+# Optional placeholder so nav doesn't break if referenced
 @app.route("/chat")
 @login_required
 def chat():
