@@ -2,10 +2,11 @@
 Peptide Tracker Web Application
 Flask web interface with session-based auth and tier support
 
-Fixes included:
-- Ensure users.tier exists in Postgres (startup-safe migration)
-- Inject current_user + has_endpoint + tier_at_least into Jinja
-- Provide the `stats` context expected by templates/dashboard.html
+This version is designed to "get it working again" by:
+- Ensuring users.tier exists in Postgres (startup-safe migration)
+- Injecting current_user + has_endpoint + tier_at_least into Jinja
+- Supplying dashboard.html's expected context (`stats`, `protocols`, `recent_injections`)
+- Providing stub routes for endpoints referenced in templates to prevent url_for BuildError
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from functools import wraps
 
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 from werkzeug.security import generate_password_hash, check_password_hash
+from jinja2 import TemplateNotFound
 
 from sqlalchemy import Column, Integer, String, DateTime, text
 from config import Config
@@ -28,7 +30,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
 # -------------------------
-# User model (must be defined BEFORE create_all)
+# User model (define BEFORE create_all)
 # -------------------------
 class User(ModelBase):
     __tablename__ = "users"
@@ -47,16 +49,13 @@ class User(ModelBase):
         return check_password_hash(self.password_hash, password)
 
 # -------------------------
-# DB init
+# DB init + migration
 # -------------------------
 db_url = Config.DATABASE_URL
 engine = create_engine(db_url)
 
 def ensure_users_tier_column(engine):
-    """
-    Your existing Postgres 'users' table was created before `tier` existed.
-    This adds the column safely at startup.
-    """
+    """Add users.tier on legacy Postgres DBs."""
     try:
         dialect = (engine.dialect.name or "").lower()
         if dialect.startswith("postgres"):
@@ -78,19 +77,13 @@ def ensure_users_tier_column(engine):
     except Exception as e:
         print(f"Warning: could not ensure users.tier column: {e}")
 
-# Create tables first (including users if missing), then ensure tier exists on legacy tables
 ModelBase.metadata.create_all(engine)
 ensure_users_tier_column(engine)
 
 # -------------------------
 # Tier helpers
 # -------------------------
-TIER_ORDER = {
-    "free": 0,
-    "tier1": 1,
-    "tier2": 2,
-    "admin": 3,
-}
+TIER_ORDER = {"free": 0, "tier1": 1, "tier2": 2, "admin": 3}
 
 def tier_at_least(tier: str, minimum: str) -> bool:
     return TIER_ORDER.get(tier or "free", 0) >= TIER_ORDER.get(minimum, 0)
@@ -149,13 +142,60 @@ def inject_template_helpers():
     }
 
 # -------------------------
+# Utility: render template if it exists, otherwise redirect
+# -------------------------
+def render_if_exists(template_name: str, fallback_endpoint: str = "dashboard", **ctx):
+    try:
+        return render_template(template_name, **ctx)
+    except TemplateNotFound:
+        return redirect(url_for(fallback_endpoint))
+
+# -------------------------
+# Dashboard context
+# -------------------------
+def _compute_dashboard_context():
+    # safe defaults so dashboard never 500s
+    stats = {
+        "active_protocols": 0,
+        "active_vials": 0,
+        "injections_this_week": 0,
+        "total_peptides": 0,
+    }
+    protocols = []
+    recent_injections = []
+
+    try:
+        # If your original DB helper exists, use it; otherwise fallback
+        from database import PeptideDB  # type: ignore
+
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
+            recent_injections = getattr(pdb, "get_recent_injections", lambda days=7: [])(days=7)
+            active_vials = getattr(pdb, "list_active_vials", lambda: [])()
+            all_peptides = getattr(pdb, "list_peptides", lambda: [])()
+            stats = {
+                "active_protocols": len(protocols),
+                "active_vials": len(active_vials),
+                "injections_this_week": len(recent_injections),
+                "total_peptides": len(all_peptides),
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"Dashboard context fallback (non-fatal): {e}")
+
+    return stats, protocols, recent_injections
+
+# -------------------------
 # Routes
 # -------------------------
 @app.route("/")
 def index():
     if "user_id" in session:
         return redirect(url_for("dashboard"))
-    return render_template("index.html")
+    return render_if_exists("index.html", fallback_endpoint="dashboard")
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -189,7 +229,7 @@ def register():
         finally:
             db.close()
 
-    return render_template("register.html")
+    return render_if_exists("register.html", fallback_endpoint="login")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -209,7 +249,7 @@ def login():
 
         flash("Invalid credentials.", "danger")
 
-    return render_template("login.html")
+    return render_if_exists("login.html", fallback_endpoint="index")
 
 @app.route("/logout")
 def logout():
@@ -217,66 +257,60 @@ def logout():
     flash("Logged out.", "info")
     return redirect(url_for("login"))
 
-def _compute_dashboard_context():
-    """
-    dashboard.html expects at least: stats.active_protocols, etc.
-    If your full DB modules exist, we compute real values.
-    Otherwise, we return safe defaults so the UI loads.
-    """
-    # safe defaults
-    stats = {
-        "active_protocols": 0,
-        "active_vials": 0,
-        "injections_this_week": 0,
-        "total_peptides": 0,
-    }
-    protocols = []
-    recent_injections = []
-
-    try:
-        # These imports exist in your original project; keep them optional.
-        from database import PeptideDB  # type: ignore
-        db = get_session(db_url)
-        try:
-            pdb = PeptideDB(db)
-            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
-            recent_injections = getattr(pdb, "get_recent_injections", lambda days=7: [])(days=7)
-            active_vials = getattr(pdb, "list_active_vials", lambda: [])()
-            all_peptides = getattr(pdb, "list_peptides", lambda: [])()
-            stats = {
-                "active_protocols": len(protocols),
-                "active_vials": len(active_vials),
-                "injections_this_week": len(recent_injections),
-                "total_peptides": len(all_peptides),
-            }
-        finally:
-            db.close()
-    except Exception as e:
-        # If anything in the DB layer breaks, do not 500 the dashboard.
-        print(f"Dashboard context fallback (non-fatal): {e}")
-
-    return stats, protocols, recent_injections
-
 @app.route("/dashboard")
 @login_required
 def dashboard():
     stats, protocols, recent_injections = _compute_dashboard_context()
-    # dashboard.html in your app uses stats + protocols + recent injections
-    return render_template(
+    return render_if_exists(
         "dashboard.html",
         stats=stats,
         protocols=protocols,
         recent_injections=(recent_injections[:5] if isinstance(recent_injections, list) else recent_injections),
     )
 
+# -------------------------
+# Endpoints referenced by templates (stubs so url_for won't crash)
+# -------------------------
+@app.route("/log-injection", methods=["GET", "POST"])
+@login_required
+def log_injection():
+    # You can build this page later; for now it won't crash the dashboard button.
+    if request.method == "POST":
+        flash("Injection logging is not wired yet (stub).", "info")
+        return redirect(url_for("dashboard"))
+    return render_if_exists("log_injection.html", fallback_endpoint="dashboard")
+
 @app.route("/peptides")
 @login_required
 def peptides():
-    # If peptides.html expects peptide data, you can extend similarly later.
-    return render_template("peptides.html")
+    return render_if_exists("peptides.html", fallback_endpoint="dashboard")
 
-# Optional placeholder so nav doesn't break if referenced
+@app.route("/calculator")
+@login_required
+def calculator():
+    return render_if_exists("calculator.html", fallback_endpoint="dashboard")
+
+@app.route("/protocols")
+@login_required
+def protocols():
+    return render_if_exists("protocols.html", fallback_endpoint="dashboard")
+
+@app.route("/vials")
+@login_required
+def vials():
+    return render_if_exists("vials.html", fallback_endpoint="dashboard")
+
+@app.route("/history")
+@login_required
+def history():
+    return render_if_exists("history.html", fallback_endpoint="dashboard")
+
+@app.route("/coaching")
+@login_required
+def coaching():
+    return render_if_exists("coaching.html", fallback_endpoint="dashboard")
+
 @app.route("/chat")
 @login_required
 def chat():
-    return redirect(url_for("dashboard"))
+    return render_if_exists("chat.html", fallback_endpoint="dashboard")
