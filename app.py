@@ -1,22 +1,10 @@
 """
 Peptide Tracker Web Application (Template-contract safe)
 
-This version is meant to stop the recurring 500s caused by:
-- Missing context variables (e.g., stats)
-- Missing endpoints referenced by url_for() in templates (BuildError)
-
-Adds stubs for ALL endpoints referenced in your dashboard.html:
-- log_injection
-- add_vial
-- add_protocol
-- protocol_detail(protocol_id)
-
-Also keeps:
-- users.tier startup migration (Postgres/SQLite)
-- Jinja helpers: current_user, has_endpoint(), tier_at_least()
-- dashboard context: stats/protocols/recent_injections (safe defaults)
-
-UPDATED: Added USDA Nutrition API integration
+UPDATED: 
+- Added USDA Nutrition API integration
+- Added password reset functionality
+- Fixed calculator route (now peptide-calculator)
 """
 
 from __future__ import annotations
@@ -24,6 +12,7 @@ from __future__ import annotations
 import os
 import json
 import requests
+import secrets
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any, Dict, List, Tuple
@@ -81,6 +70,17 @@ class FoodLog(ModelBase):
     
     # Raw API response
     raw_data = Column(String(5000))
+
+# Password reset token model
+class PasswordResetToken(ModelBase):
+    __tablename__ = "password_reset_tokens"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False)
+    token = Column(String(100), unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Integer, default=0)  # 0 = not used, 1 = used
 
 # -----------------------------------------------------------------------------
 # DB init + migration
@@ -290,6 +290,106 @@ def dashboard():
         protocols=protocols,
         recent_injections=recent_injections,
     )
+
+# -----------------------------------------------------------------------------
+# Password Reset Routes
+# -----------------------------------------------------------------------------
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    """Request password reset"""
+    if request.method == "POST":
+        email = (request.form.get("email") or "").strip()
+        
+        if not email:
+            flash("Please enter your email address.", "error")
+            return render_if_exists("forgot_password.html", fallback_endpoint="login")
+        
+        db = get_session(db_url)
+        try:
+            user = db.query(User).filter_by(email=email).first()
+            
+            if user:
+                # Generate reset token
+                token = secrets.token_urlsafe(32)
+                expires_at = datetime.utcnow() + timedelta(hours=24)
+                
+                reset_token = PasswordResetToken(
+                    user_id=user.id,
+                    token=token,
+                    expires_at=expires_at
+                )
+                db.add(reset_token)
+                db.commit()
+                
+                # Create reset link
+                reset_link = url_for('reset_password', token=token, _external=True)
+                
+                flash(f"Password reset link generated! Copy this link: {reset_link}", "success")
+                flash("This link expires in 24 hours.", "info")
+            else:
+                # Don't reveal if email exists
+                flash("If that email is registered, a reset link has been generated.", "info")
+        finally:
+            db.close()
+    
+    return render_if_exists("forgot_password.html", fallback_endpoint="login")
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    """Reset password using token"""
+    db = get_session(db_url)
+    try:
+        # Find valid token
+        reset_token = db.query(PasswordResetToken).filter_by(
+            token=token,
+            used=0
+        ).first()
+        
+        if not reset_token:
+            flash("Invalid or expired reset link.", "error")
+            return redirect(url_for("login"))
+        
+        if reset_token.expires_at < datetime.utcnow():
+            flash("This reset link has expired.", "error")
+            return redirect(url_for("login"))
+        
+        user = db.query(User).filter_by(id=reset_token.user_id).first()
+        if not user:
+            flash("User not found.", "error")
+            return redirect(url_for("login"))
+        
+        if request.method == "POST":
+            password = (request.form.get("password") or "").strip()
+            confirm_password = (request.form.get("confirm_password") or "").strip()
+            
+            if not password or not confirm_password:
+                flash("Both password fields are required.", "error")
+                return render_if_exists("reset_password.html", fallback_endpoint="login", token=token)
+            
+            if password != confirm_password:
+                flash("Passwords do not match.", "error")
+                return render_if_exists("reset_password.html", fallback_endpoint="login", token=token)
+            
+            if len(password) < 8:
+                flash("Password must be at least 8 characters.", "error")
+                return render_if_exists("reset_password.html", fallback_endpoint="login", token=token)
+            
+            # Update password
+            user.set_password(password)
+            
+            # Mark token as used
+            reset_token.used = 1
+            
+            db.commit()
+            
+            flash("Password reset successful! You can now log in.", "success")
+            return redirect(url_for("login"))
+        
+        return render_if_exists("reset_password.html", fallback_endpoint="login", token=token, email=user.email)
+    
+    finally:
+        db.close()
 
 # -----------------------------------------------------------------------------
 # Stub endpoints to prevent BuildError
