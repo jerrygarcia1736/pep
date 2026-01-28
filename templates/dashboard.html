@@ -4,11 +4,48 @@
 
 {% block content %}
 <!-- App-Style Header -->
-<div class="mb-4">
+<div class="mb-3">
     <h1 class="mb-2">
         <i class="bi bi-speedometer2"></i> Dashboard
     </h1>
-    <p class="text-muted mb-0">Track your peptide protocols, vials, and injections all in one place</p>
+    <p class="text-muted mb-0">Track your peptide protocols, vials, and injections all in one place. Have immediate answers with AI to any question you possibly have with <strong>Pep AI</strong>.</p>
+</div>
+
+<!-- Quick Actions -->
+<div class="card mb-4 shadow-sm">
+    <div class="card-header bg-primary text-white">
+        <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Actions</h5>
+    </div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-6 col-md-3">
+                <a href="{{ url_for('log_injection') }}" class="btn btn-lg btn-success w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
+                    <i class="bi bi-plus-circle mb-2" style="font-size: 2rem;"></i>
+                    <span>Log Injection</span>
+                </a>
+            </div>
+            <div class="col-6 col-md-3">
+                <a href="{{ url_for('calculator') }}" class="btn btn-lg btn-info w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
+                    <i class="bi bi-calculator mb-2" style="font-size: 2rem;"></i>
+                    <span class="fw-semibold">Peptide Calculator</span>
+                    <small class="text-white-50 mt-1" style="font-size: 0.7rem;">Calculate dosing & reconstitution</small>
+                </a>
+            </div>
+            <div class="col-6 col-md-3">
+                <a href="{{ url_for('chat') }}" class="btn btn-lg btn-gradient w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3 text-white" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                    <i class="bi bi-chat-dots-fill mb-2" style="font-size: 2rem;"></i>
+                    <span class="fw-semibold">Pep AI</span>
+                    <small class="text-white-75 mt-1" style="font-size: 0.7rem;">Ask anything about peptides</small>
+                </a>
+            </div>
+            <div class="col-6 col-md-3">
+                <a href="{{ url_for('add_protocol') }}" class="btn btn-lg btn-primary w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
+                    <i class="bi bi-calendar-plus mb-2" style="font-size: 2rem;"></i>
+                    <span>New Protocol</span>
+                </a>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Stats Cards -->
@@ -71,60 +108,55 @@
 
 
 <!-- Age Slider Recommendations -->
-<div class="card shadow-sm mb-4">
-  <div class="card-header bg-light d-flex align-items-center justify-content-between">
-    <div class="fw-semibold">
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-light d-flex align-items-center justify-content-between py-2">
+    <div class="fw-semibold small">
       <i class="bi bi-sliders"></i> Age Slider (Recommendations)
     </div>
     <span class="badge text-bg-secondary" id="ageBadge">35</span>
   </div>
-  <div class="card-body">
-    <div class="row g-3 align-items-center">
+  <div class="card-body py-2">
+    <div class="row g-2 align-items-center">
       <div class="col-12 col-lg-6">
-        <label for="ageSlider" class="form-label mb-1">Age</label>
-        <input type="range" class="form-range" min="18" max="85" value="35" step="1" id="ageSlider">
+        <label for="ageSlider" class="form-label mb-1 small">Age</label>
+        <input type="range" class="form-range form-range-sm" min="18" max="85" value="35" step="1" id="ageSlider">
         <div class="d-flex justify-content-between small text-muted">
           <span>18</span><span>35</span><span>50</span><span>85</span>
         </div>
-        <div class="small text-muted mt-2">
-          This is a UI prioritization tool based on your peptide notes/benefits text — not medical advice.
+
+        <div class="mt-2">
+          <div class="fw-semibold mb-1 small"><i class="bi bi-bullseye"></i> Goals</div>
+          <div class="d-flex flex-wrap gap-1">
+            <input type="checkbox" class="btn-check goalToggle" id="gFat" autocomplete="off" value="fat_loss">
+            <label class="btn btn-outline-primary btn-sm py-1 px-2 small" for="gFat"><i class="bi bi-fire"></i> Fat loss</label>
+
+            <input type="checkbox" class="btn-check goalToggle" id="gRec" autocomplete="off" value="recovery">
+            <label class="btn btn-outline-success btn-sm py-1 px-2 small" for="gRec"><i class="bi bi-heart-pulse"></i> Recovery</label>
+
+            <input type="checkbox" class="btn-check goalToggle" id="gSkin" autocomplete="off" value="skin">
+            <label class="btn btn-outline-warning btn-sm py-1 px-2 small" for="gSkin"><i class="bi bi-droplet"></i> Skin</label>
+
+            <input type="checkbox" class="btn-check goalToggle" id="gCog" autocomplete="off" value="cognition">
+            <label class="btn btn-outline-info btn-sm py-1 px-2 small" for="gCog"><i class="bi bi-lightbulb"></i> Cognition</label>
+
+            <input type="checkbox" class="btn-check goalToggle" id="gLong" autocomplete="off" value="longevity">
+            <label class="btn btn-outline-secondary btn-sm py-1 px-2 small" for="gLong"><i class="bi bi-hourglass-split"></i> Longevity</label>
+          </div>
         </div>
-
-<div class="mt-3">
-  <div class="fw-semibold mb-2"><i class="bi bi-bullseye"></i> Goals</div>
-  <div class="d-flex flex-wrap gap-2">
-    <input type="checkbox" class="btn-check goalToggle" id="gFat" autocomplete="off" value="fat_loss">
-    <label class="btn btn-outline-primary btn-sm" for="gFat"><i class="bi bi-fire"></i> Fat loss</label>
-
-    <input type="checkbox" class="btn-check goalToggle" id="gRec" autocomplete="off" value="recovery">
-    <label class="btn btn-outline-success btn-sm" for="gRec"><i class="bi bi-heart-pulse"></i> Recovery</label>
-
-    <input type="checkbox" class="btn-check goalToggle" id="gSkin" autocomplete="off" value="skin">
-    <label class="btn btn-outline-warning btn-sm" for="gSkin"><i class="bi bi-droplet"></i> Skin</label>
-
-    <input type="checkbox" class="btn-check goalToggle" id="gCog" autocomplete="off" value="cognition">
-    <label class="btn btn-outline-info btn-sm" for="gCog"><i class="bi bi-lightbulb"></i> Cognition</label>
-
-    <input type="checkbox" class="btn-check goalToggle" id="gLong" autocomplete="off" value="longevity">
-    <label class="btn btn-outline-secondary btn-sm" for="gLong"><i class="bi bi-hourglass-split"></i> Longevity</label>
-  </div>
-  <div class="small text-muted mt-2">Toggle goals to prioritize recommendations.</div>
-</div>
-
       </div>
 
       <div class="col-12 col-lg-6">
-        <div class="d-flex align-items-center justify-content-between mb-2">
-          <div class="fw-semibold">Suggested "start here" list</div>
-          <span class="badge bg-warning text-dark px-3 py-2" style="font-size: 1rem;">
-            <i class="bi bi-star-fill" style="font-size: 1.2rem;"></i> Paid Version Only
+        <div class="d-flex align-items-center justify-content-between mb-1">
+          <div class="fw-semibold small">Suggested "start here" list</div>
+          <span class="badge bg-warning text-dark px-2 py-1" style="font-size: 0.85rem;">
+            <i class="bi bi-star-fill" style="font-size: 1rem;"></i> Paid Version Only
           </span>
         </div>
-        <div class="list-group mt-2" id="recoList">
-          <div class="text-muted text-center py-4">
-            <i class="bi bi-lock-fill" style="font-size: 2rem;"></i>
-            <div class="mt-2">Premium feature</div>
-            <div class="small">Upgrade to unlock personalized recommendations</div>
+        <div class="list-group mt-1" id="recoList">
+          <div class="text-muted text-center py-3">
+            <i class="bi bi-lock-fill" style="font-size: 1.5rem;"></i>
+            <div class="mt-1 small">Premium feature</div>
+            <div class="small">Upgrade to unlock</div>
           </div>
         </div>
       </div>
@@ -133,41 +165,6 @@
 </div>
 
 
-<!-- Quick Actions -->
-<div class="card mb-4 shadow-sm">
-    <div class="card-header bg-primary text-white">
-        <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Actions</h5>
-    </div>
-    <div class="card-body">
-        <div class="row g-3">
-            <div class="col-6 col-md-3">
-                <a href="{{ url_for('log_injection') }}" class="btn btn-lg btn-success w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
-                    <i class="bi bi-plus-circle mb-2" style="font-size: 2rem;"></i>
-                    <span>Log Injection</span>
-                </a>
-            </div>
-            <div class="col-6 col-md-3">
-                <a href="{{ url_for('calculator') }}" class="btn btn-lg btn-info w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
-                    <i class="bi bi-calculator mb-2" style="font-size: 2rem;"></i>
-                    <span class="fw-semibold">Peptide Calculator</span>
-                    <small class="text-white-50 mt-1" style="font-size: 0.7rem;">Calculate dosing & reconstitution</small>
-                </a>
-            </div>
-            <div class="col-6 col-md-3">
-                <a href="{{ url_for('add_vial') }}" class="btn btn-lg btn-warning w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
-                    <i class="bi bi-box mb-2" style="font-size: 2rem;"></i>
-                    <span>Add Vial</span>
-                </a>
-            </div>
-            <div class="col-6 col-md-3">
-                <a href="{{ url_for('add_protocol') }}" class="btn btn-lg btn-primary w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
-                    <i class="bi bi-calendar-plus mb-2" style="font-size: 2rem;"></i>
-                    <span>New Protocol</span>
-                </a>
-            </div>
-        </div>
-    </div>
-</div>
 
 <div class="row">
     <!-- Active Protocols -->
