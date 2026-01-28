@@ -18,5 +18,8 @@ APScheduler>=3.10.4
 # Security
 Werkzeug>=3.0.0
 
+# Environment variables
+python-dotenv>=1.0.0
+
 # Server
 gunicorn>=21.2.0
