@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 960px;">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h1 class="mb-0">Log Food</h1>
+      <div class="text-muted">Search foods using CalorieNinjas and save macros (beta).</div>
+    </div>
+    <a class="btn btn-outline-primary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left"></i> Back</a>
+  </div>
+
+  {% if not calorieninjas_enabled %}
+    <div class="alert alert-warning">
+      <div class="fw-semibold mb-1">CalorieNinjas API key not configured.</div>
+      <div class="small">Set <code>CALORIENINJAS_API_KEY</code> in your environment to enable nutrition search.</div>
+    </div>
+  {% endif %}
+
+  <form method="get" class="card card-body mb-4">
+    <label class="form-label fw-semibold">What did you eat?</label>
+    <div class="input-group">
+      <input name="q" class="form-control" placeholder="e.g., 2 eggs and 1 banana" value="{{ request.args.get('q','') }}">
+      <button class="btn btn-primary" type="submit"><i class="bi bi-search"></i> Search</button>
+    </div>
+    <div class="form-text">Tip: include amounts (e.g., “200g chicken breast”).</div>
+  </form>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  {% if items %}
+    <div class="card">
+      <div class="card-header fw-semibold">Results</div>
+      <div class="table-responsive">
+        <table class="table mb-0 align-middle">
+          <thead>
+            <tr>
+              <th>Food</th>
+              <th class="text-end">Calories</th>
+              <th class="text-end">Protein (g)</th>
+              <th class="text-end">Carbs (g)</th>
+              <th class="text-end">Fat (g)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in items %}
+            <tr>
+              <td class="text-capitalize">{{ it.name }}</td>
+              <td class="text-end">{{ '%.0f'|format(it.calories or 0) }}</td>
+              <td class="text-end">{{ '%.1f'|format(it.protein_g or 0) }}</td>
+              <td class="text-end">{{ '%.1f'|format(it.carbs_total_g or 0) }}</td>
+              <td class="text-end">{{ '%.1f'|format(it.fat_total_g or 0) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card-body small text-muted">
+        Logging to your database is coming next. For now this page validates the API integration and displays macros.
+      </div>
+    </div>
+  {% elif request.args.get('q') %}
+    <div class="alert alert-info">No results found for that query.</div>
+  {% endif %}
+</div>
+{% endblock %}
