@@ -47,7 +47,7 @@
 
 
 <!-- Age Slider Recommendations -->
-<div class="card shadow-sm mb-4">
+<div class="card shadow-sm mb-4 age-card age-card-compact">
   <div class="card-header bg-light d-flex align-items-center justify-content-between">
     <div class="fw-semibold">
       <i class="bi bi-sliders"></i> Age Slider (Recommendations)
@@ -62,8 +62,8 @@
         <div class="d-flex justify-content-between small text-muted">
           <span>18</span><span>35</span><span>50</span><span>85</span>
         </div>
-        <div class="small text-muted mt-2">
-          This is a UI prioritization tool based on your peptide notes/benefits text — not medical advice.
+        <div class="small text-muted mt-2 age-card-note">
+          UI prioritization only (based on your notes/benefits text) — not medical advice.
         </div>
 
 <div class="mt-3">
@@ -86,6 +86,25 @@
   </div>
   <div class="small text-muted mt-2">Toggle goals to prioritize recommendations.</div>
 </div>
+
+        <!-- Mini shortcuts (match top nav) -->
+        <div class="age-mini-nav mt-3">
+          <a class="age-mini-link" href="{{ url_for('peptides') }}" title="Peptides">
+            <i class="bi bi-list"></i><span>Peptides</span>
+          </a>
+          <a class="age-mini-link" href="{{ url_for('calculator') }}" title="Calculator">
+            <i class="bi bi-calculator"></i><span>Calculator</span>
+          </a>
+          <a class="age-mini-link" href="{{ url_for('chat') }}" title="Pep AI">
+            <i class="bi bi-chat-dots"></i><span>Pep AI</span>
+          </a>
+          <a class="age-mini-link" href="{{ url_for('vials') }}" title="Vials">
+            <i class="bi bi-box-seam"></i><span>Vials</span>
+          </a>
+          <a class="age-mini-link" href="{{ url_for('protocols') }}" title="Protocols">
+            <i class="bi bi-clipboard-check"></i><span>Protocols</span>
+          </a>
+        </div>
 
       </div>
 

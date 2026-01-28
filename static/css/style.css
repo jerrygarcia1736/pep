@@ -1,20 +1,100 @@
-/* Minimal polish + hover effects + compare cards */
-.card-hover {
-  transition: transform .12s ease, box-shadow .12s ease;
-}
-.card-hover:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 .5rem 1rem rgba(0,0,0,.15);
-}
+/* Main styles */
+body { background-color: #f8f9fa; }
 
-.pep-img {
-  width: 100%;
-  height: 140px;
-  object-fit: cover;
-  border-radius: .5rem;
-  background: #f3f4f6;
-}
+/* Navbar tweaks */
+.navbar-brand { font-weight: 600; }
 
-.badge-pill {
+/* -----------------------------
+   Dashboard: Age Slider
+   ----------------------------- */
+.age-card.age-card-compact .card-body { padding-top: 1rem; padding-bottom: 1rem; }
+.age-card.age-card-compact .age-card-note { margin-top: .5rem; }
+.age-card.age-card-compact .form-range { margin-bottom: .25rem; }
+.age-card.age-card-compact #recommendationsBox { min-height: 4.5rem; }
+.age-card .mini-actions { gap: .5rem; }
+.age-card .mini-actions .mini-action {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .35rem .6rem;
   border-radius: 999px;
+  border: 1px solid rgba(0,0,0,.12);
+  background: #fff;
+  color: #212529;
+  text-decoration: none;
+  font-size: .85rem;
+  line-height: 1;
+}
+.age-card .mini-actions .mini-action i { font-size: 1rem; opacity: .9; }
+.age-card .mini-actions .mini-action:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 .25rem .75rem rgba(0,0,0,.08);
+}
+
+/* -----------------------------
+   Peptide cards: richer look + clearer compare toggle
+   ----------------------------- */
+.peptide-card {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+  border: 1px solid rgba(0,0,0,.08);
+}
+.peptide-card .card-header {
+  background: linear-gradient(180deg, rgba(13,110,253,.06) 0%, rgba(13,110,253,.00) 100%);
+  border-bottom: 1px solid rgba(0,0,0,.06);
+}
+.peptide-route-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .25rem .55rem;
+  border-radius: 999px;
+  background: rgba(13,110,253,.12);
+  color: #0b5ed7;
+  font-weight: 600;
+  font-size: .82rem;
+}
+.peptide-route-badge svg { width: 16px; height: 16px; }
+.route-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .25rem .55rem;
+  border-radius: 999px;
+  background: rgba(13,110,253,.12);
+  color: #0b5ed7;
+  font-weight: 600;
+  font-size: .82rem;
+  border: 1px solid rgba(13,110,253,.18);
+}
+.route-badge .vial-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(13,110,253,.18);
+  padding: 1px;
+}
+.peptide-card-footer { background: transparent; border-top: 1px solid rgba(0,0,0,.06); }
+.peptide-card-footer .compare-toggle { flex: 1 1 auto; }
+.peptide-card-footer a.btn { flex: 1 1 auto; }
+.compare-toggle.btn-success { color: #fff; }
+.compare-toggle:focus { box-shadow: 0 0 0 .2rem rgba(25,135,84,.15); }
+
+/* If you have a fixed image area on cards, keep it from becoming a giant blank box */
+.peptide-image, .peptide-img, .card-img-top { object-fit: cover; }
+.peptide-image-placeholder {
+  height: 140px;
+  border-radius: .5rem;
+  border: 1px dashed rgba(0,0,0,.15);
+  background:
+    radial-gradient(circle at 30% 30%, rgba(13,110,253,.12), transparent 45%),
+    radial-gradient(circle at 70% 40%, rgba(25,135,84,.10), transparent 50%),
+    #f8f9fa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(0,0,0,.55);
+  font-size: .9rem;
 }
