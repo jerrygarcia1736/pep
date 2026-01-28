@@ -19,6 +19,26 @@
 </div>
 <p class="text-muted">Educational starter templates. Click <strong>Start This Protocol</strong> to review and add it to your account.</p>
 
+<!-- Quick Peptides -->
+<div class="card border-0 shadow-sm mb-4">
+  <div class="card-header bg-white">
+    <div class="d-flex align-items-center gap-2">
+      <i class="bi bi-capsule"></i>
+      <span class="fw-semibold">Quick Peptides</span>
+    </div>
+  </div>
+  <div class="card-body">
+    <p class="text-muted mb-3">Shortcuts to commonly tracked peptides (names only — details are set when you create a protocol).</p>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('add_protocol') }}?template=kpv">KPV</a>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('add_protocol') }}?template=dsip">DSIP</a>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('add_protocol') }}?template=cjc1295">CJC-1295</a>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('add_protocol') }}?template=ipamorelin">Ipamorelin</a>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('add_protocol') }}?template=selank">Selank</a>
+    </div>
+  </div>
+</div>
+
 <div class="row g-3 mb-5">
   {% set starter = [
     {"title":"BPC-157 Healing Protocol","subtitle":"Body Protection Compound-157","dose":"250–500 mcg","freq":"1–2× per day","duration":"4–6 weeks","route":"Subcutaneous","benefits":["Muscle/tendon/ligament support","Gut support","Anti-inflammatory effects","Connective tissue recovery"],"template":"bpc157"},
