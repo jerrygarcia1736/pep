@@ -1,12 +1,15 @@
 """
-Peptide Tracker Web Application
-Flask web interface with session-based auth and tier support
+Peptide Tracker Web Application (Render-friendly)
 
-This version is designed to "get it working again" by:
-- Ensuring users.tier exists in Postgres (startup-safe migration)
-- Injecting current_user + has_endpoint + tier_at_least into Jinja
-- Supplying dashboard.html's expected context (`stats`, `protocols`, `recent_injections`)
-- Providing stub routes for endpoints referenced in templates to prevent url_for BuildError
+This version is focused on "stop the 500s" so the site loads again.
+It does NOT implement full business logic yet — it wires the template contract.
+
+Includes:
+- Startup-safe migration for users.tier (Postgres/SQLite)
+- Session-based auth (login/register/logout)
+- Jinja globals: current_user, has_endpoint(), tier_at_least()
+- Dashboard context: stats/protocols/recent_injections (safe defaults)
+- Stub routes for template url_for() targets to prevent BuildError
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from functools import wraps
+from typing import Any, Dict, List, Tuple
 
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -23,15 +27,15 @@ from sqlalchemy import Column, Integer, String, DateTime, text
 from config import Config
 from models import get_session, create_engine, Base as ModelBase
 
-# -------------------------
-# Flask app init
-# -------------------------
+# -----------------------------------------------------------------------------
+# Flask app
+# -----------------------------------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
-# -------------------------
-# User model (define BEFORE create_all)
-# -------------------------
+# -----------------------------------------------------------------------------
+# Models (define before create_all)
+# -----------------------------------------------------------------------------
 class User(ModelBase):
     __tablename__ = "users"
 
@@ -48,14 +52,14 @@ class User(ModelBase):
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
 
-# -------------------------
+# -----------------------------------------------------------------------------
 # DB init + migration
-# -------------------------
+# -----------------------------------------------------------------------------
 db_url = Config.DATABASE_URL
 engine = create_engine(db_url)
 
-def ensure_users_tier_column(engine):
-    """Add users.tier on legacy Postgres DBs."""
+def ensure_users_tier_column(engine) -> None:
+    """Add users.tier on legacy DBs (safe no-op if already present)."""
     try:
         dialect = (engine.dialect.name or "").lower()
         if dialect.startswith("postgres"):
@@ -68,29 +72,23 @@ def ensure_users_tier_column(engine):
                 cols = [row[1] for row in conn.execute(text("PRAGMA table_info(users);")).fetchall()]
                 if "tier" not in cols:
                     conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
-        else:
-            with engine.begin() as conn:
-                try:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
-                except Exception:
-                    pass
     except Exception as e:
         print(f"Warning: could not ensure users.tier column: {e}")
 
 ModelBase.metadata.create_all(engine)
 ensure_users_tier_column(engine)
 
-# -------------------------
+# -----------------------------------------------------------------------------
 # Tier helpers
-# -------------------------
+# -----------------------------------------------------------------------------
 TIER_ORDER = {"free": 0, "tier1": 1, "tier2": 2, "admin": 3}
 
 def tier_at_least(tier: str, minimum: str) -> bool:
     return TIER_ORDER.get(tier or "free", 0) >= TIER_ORDER.get(minimum, 0)
 
-# -------------------------
+# -----------------------------------------------------------------------------
 # Auth helpers
-# -------------------------
+# -----------------------------------------------------------------------------
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -109,9 +107,9 @@ def get_current_user():
     finally:
         db.close()
 
-# -------------------------
+# -----------------------------------------------------------------------------
 # Jinja helpers
-# -------------------------
+# -----------------------------------------------------------------------------
 class AnonymousUser:
     is_authenticated = False
     tier = "free"
@@ -125,47 +123,38 @@ def inject_template_helpers():
         return name in app.view_functions
 
     if not user:
-        return {
-            "current_user": AnonymousUser(),
-            "has_endpoint": has_endpoint,
-            "tier_at_least": tier_at_least,
-        }
+        return {"current_user": AnonymousUser(), "has_endpoint": has_endpoint, "tier_at_least": tier_at_least}
 
     user.is_authenticated = True
     if not getattr(user, "tier", None):
         user.tier = "free"
 
-    return {
-        "current_user": user,
-        "has_endpoint": has_endpoint,
-        "tier_at_least": tier_at_least,
-    }
+    return {"current_user": user, "has_endpoint": has_endpoint, "tier_at_least": tier_at_least}
 
-# -------------------------
-# Utility: render template if it exists, otherwise redirect
-# -------------------------
+# -----------------------------------------------------------------------------
+# Utility: render a template if it exists, otherwise fall back safely
+# -----------------------------------------------------------------------------
 def render_if_exists(template_name: str, fallback_endpoint: str = "dashboard", **ctx):
     try:
         return render_template(template_name, **ctx)
     except TemplateNotFound:
         return redirect(url_for(fallback_endpoint))
 
-# -------------------------
-# Dashboard context
-# -------------------------
-def _compute_dashboard_context():
-    # safe defaults so dashboard never 500s
+# -----------------------------------------------------------------------------
+# Dashboard context (safe defaults)
+# -----------------------------------------------------------------------------
+def _compute_dashboard_context() -> Tuple[Dict[str, Any], List[Any], List[Any]]:
     stats = {
         "active_protocols": 0,
         "active_vials": 0,
         "injections_this_week": 0,
         "total_peptides": 0,
     }
-    protocols = []
-    recent_injections = []
+    protocols: List[Any] = []
+    recent_injections: List[Any] = []
 
+    # Best-effort: use your project's DB helper if present; otherwise defaults
     try:
-        # If your original DB helper exists, use it; otherwise fallback
         from database import PeptideDB  # type: ignore
 
         db = get_session(db_url)
@@ -188,27 +177,26 @@ def _compute_dashboard_context():
 
     return stats, protocols, recent_injections
 
-# -------------------------
-# Routes
-# -------------------------
+# -----------------------------------------------------------------------------
+# Core routes
+# -----------------------------------------------------------------------------
 @app.route("/")
 def index():
     if "user_id" in session:
         return redirect(url_for("dashboard"))
-    return render_if_exists("index.html", fallback_endpoint="dashboard")
+    return render_if_exists("index.html", fallback_endpoint="login")
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        username = request.form.get("username")
-        email = request.form.get("email")
-        password = request.form.get("password")
-        confirm = request.form.get("confirm_password")
+        username = (request.form.get("username") or "").strip()
+        email = (request.form.get("email") or "").strip().lower()
+        password = request.form.get("password") or ""
+        confirm = request.form.get("confirm_password") or ""
 
         if not username or not email or not password:
             flash("All fields are required.", "danger")
             return redirect(url_for("register"))
-
         if password != confirm:
             flash("Passwords do not match.", "danger")
             return redirect(url_for("register"))
@@ -234,8 +222,8 @@ def register():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
 
         db = get_session(db_url)
         try:
@@ -268,17 +256,25 @@ def dashboard():
         recent_injections=(recent_injections[:5] if isinstance(recent_injections, list) else recent_injections),
     )
 
-# -------------------------
-# Endpoints referenced by templates (stubs so url_for won't crash)
-# -------------------------
+# -----------------------------------------------------------------------------
+# Stub routes to satisfy templates (prevents url_for BuildError)
+# Add more here as logs reveal them.
+# -----------------------------------------------------------------------------
 @app.route("/log-injection", methods=["GET", "POST"])
 @login_required
 def log_injection():
-    # You can build this page later; for now it won't crash the dashboard button.
     if request.method == "POST":
-        flash("Injection logging is not wired yet (stub).", "info")
+        flash("log_injection is a stub right now.", "info")
         return redirect(url_for("dashboard"))
     return render_if_exists("log_injection.html", fallback_endpoint="dashboard")
+
+@app.route("/add-vial", methods=["GET", "POST"])
+@login_required
+def add_vial():
+    if request.method == "POST":
+        flash("add_vial is a stub right now.", "info")
+        return redirect(url_for("dashboard"))
+    return render_if_exists("add_vial.html", fallback_endpoint="dashboard")
 
 @app.route("/peptides")
 @login_required
