@@ -111,7 +111,7 @@ const sendBtn = document.getElementById('send-btn');
 document.querySelectorAll('.example-btn').forEach(btn => {
     btn.addEventListener('click', function() {
         userInput.value = this.getAttribute('data-question');
-        chatForm.dispatchEvent(new Event('submit'));
+        chatForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
 });
 

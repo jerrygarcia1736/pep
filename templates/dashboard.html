@@ -282,6 +282,12 @@
   }
 
   slider.addEventListener("input", debounceLoad);
+
+  // Recompute when goals change
+  document.querySelectorAll(".goalToggle").forEach((el) => {
+    el.addEventListener("change", () => load(slider.value));
+  });
+
   load(slider.value);
 })();
 </script>
