@@ -537,8 +537,11 @@ When answering:
 
 Remember: You're a knowledgeable assistant, not a doctor."""
 
-        # Call OpenAI API
-        response = openai.ChatCompletion.create(
+        # Call OpenAI API (new v1.0+ syntax)
+        from openai import OpenAI
+        client = OpenAI(api_key=Config.OPENAI_API_KEY)
+        
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
