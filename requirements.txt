@@ -3,17 +3,6 @@ sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0  # PostgreSQL driver
 python-dotenv>=1.0.0    # For environment variables
 
-# Web Framework
-flask>=3.0.0            # Web framework
-flask-session>=0.5.0    # Session management
-werkzeug>=3.0.0         # WSGI utilities (included with Flask)
-
-# AI Integration
-openai>=1.0.0           # OpenAI API for AI chat
-
-# WSGI Server
-gunicorn>=21.0.0        # Production server
-
 # Optional but recommended
 alembic>=1.12.0         # Database migrations
 click>=8.1.0            # CLI creation
@@ -28,3 +17,4 @@ click>=8.1.0            # CLI creation
 # Development dependencies
 pytest>=7.4.0           # Testing
 ipython>=8.12.0         # Better REPL
+gunicorn
