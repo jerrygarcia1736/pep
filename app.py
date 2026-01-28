@@ -535,6 +535,19 @@ def chat():
     return render_template('chat.html')
 
 
+@app.route('/bodybuilding')
+@login_required
+def bodybuilding():
+    """Bodybuilding peptide protocols - Platinum feature"""
+    # Create a simple user object for the template
+    # In the future, this will come from the real database with tier info
+    class TempUser:
+        platinum_tier = False  # Change to True to see full content
+        premium_tier = False
+    
+    return render_template('bodybuilding.html', user=TempUser())
+
+
 @app.route('/api/chat', methods=['POST'])
 @login_required
 def api_chat():
