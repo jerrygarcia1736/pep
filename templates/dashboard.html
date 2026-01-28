@@ -53,22 +53,25 @@
   }
   .explore-card .explore-btn{
     border-radius: 12px;
-    padding: .7rem 1.1rem; /* BIGGER: was .4rem .65rem */
+    padding: .5rem .8rem;
     display: inline-flex;
     align-items: center;
-    gap: .6rem; /* BIGGER: was .45rem */
+    gap: .55rem;
     border: 1px solid rgba(13,110,253,.25);
-    font-size: 1.1rem; /* BIGGER: Added larger text */
   }
+  /* icons ~70% bigger */
   .explore-card .explore-btn .icon-badge{
-    width: 42px; /* BIGGER: was 28px */
-    height: 42px; /* BIGGER: was 28px */
-    border-radius: 12px; /* BIGGER: was 10px */
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     color: #fff;
-    font-size: 1.4rem; /* BIGGER: was 0.95rem */
+    font-size: 1.35rem;
+  }
+  .explore-card .explore-btn span:last-child{
+    font-size: 1.05rem;
   }
 </style>
 
@@ -80,7 +83,7 @@
         <h5 class="mb-0"><i class="bi bi-compass me-2"></i>Explore</h5>
       </div>
       <div class="card-body">
-        <div class="d-flex flex-wrap gap-3">
+        <div class="d-flex flex-wrap gap-2">
           <a class="btn btn-outline-primary explore-btn" href="{{ url_for('chat') }}">
             <span class="icon-badge" style="background:#0d6efd"><i class="bi bi-chat-dots"></i></span>
             <span>Pep AI</span>
@@ -89,16 +92,12 @@
             <span class="icon-badge" style="background:#20c997"><i class="bi bi-capsule"></i></span>
             <span>Peptides</span>
           </a>
-          <a class="btn btn-outline-primary explore-btn" href="{{ url_for('peptide_calculator') }}">
+          <a class="btn btn-outline-primary explore-btn" href="{{ url_for('calculator') }}">
             <span class="icon-badge" style="background:#0dcaf0"><i class="bi bi-calculator"></i></span>
             <span>Peptide Calculator</span>
           </a>
-          <a class="btn btn-outline-primary explore-btn" href="{{ url_for('nutrition') }}">
-            <span class="icon-badge" style="background:#ffc107"><i class="bi bi-egg-fried"></i></span>
-            <span>Nutrition</span>
-          </a>
           <a class="btn btn-outline-primary explore-btn" href="{{ url_for('vials') }}">
-            <span class="icon-badge" style="background:#fd7e14"><i class="bi bi-droplet-half"></i></span>
+            <span class="icon-badge" style="background:#ffc107"><i class="bi bi-droplet-half"></i></span>
             <span>Vials</span>
           </a>
           <a class="btn btn-outline-primary explore-btn" href="{{ url_for('protocols') }}">
@@ -106,14 +105,14 @@
             <span>Protocols</span>
           </a>
         </div>
-        <p class="text-muted mt-3 mb-0">Quick links to core features</p>
+        <p class="text-muted mt-2 mb-0">Quick links to the core pages.</p>
       </div>
     </div>
   </div>
 </div>
 
 <!-- Age Slider (Recommendations) -->
-<div class="card shadow-sm mb-4 mt-4" id="ageCard">
+<div class="card shadow-sm mb-4" id="ageCard">
   <div class="card-header bg-light d-flex align-items-center justify-content-between">
     <div class="fw-semibold">
       <i class="bi bi-sliders"></i> Age Slider (Recommendations)
@@ -156,7 +155,7 @@
 
       <div class="col-12 col-lg-6">
         <div class="d-flex align-items-center justify-content-between">
-          <div class="fw-bold">Suggested "start here" list</div>
+          <div class="fw-bold">Suggested “start here” list</div>
           <span class="badge bg-warning text-dark px-3 py-2" style="border-radius:999px;">
             ⭐ Paid Version Only
           </span>
@@ -164,29 +163,39 @@
         <div class="alert alert-light border mt-3 mb-0 d-flex align-items-center" style="border-radius:12px;">
           <span class="me-2" aria-hidden="true">🔒</span>
           <div class="text-muted mb-0" style="line-height:1.3;">
-            Personalized "start here" recommendations are available in the paid version.
+            Personalized “start here” recommendations are available in the paid version.
           </div>
         </div>
       </div>
+
     </div>
   </div>
 </div>
 
 <!-- Quick Actions -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card shadow-sm">
-            <div class="card-header bg-light">
-                <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Actions</h5>
-            </div>
-            <div class="card-body">
-                <a href="{{ url_for('log_injection') }}" class="btn btn-primary btn-lg me-2 mb-2">
+<div class="card mb-4">
+    <div class="card-header bg-primary text-white">
+        <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Actions</h5>
+    </div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-3">
+                <a href="{{ url_for('log_injection') }}" class="btn btn-lg btn-success w-100">
                     <i class="bi bi-plus-circle"></i><br>Log Injection
                 </a>
-                <a href="{{ url_for('add_vial') }}" class="btn btn-success btn-lg me-2 mb-2">
-                    <i class="bi bi-droplet-half"></i><br>New Vial
+            </div>
+            <div class="col-md-3">
+                <a href="{{ url_for('calculator') }}" class="btn btn-lg btn-info w-100">
+                    <i class="bi bi-calculator"></i><br>Peptide Calculator
                 </a>
-                <a href="{{ url_for('add_protocol') }}" class="btn btn-info btn-lg mb-2">
+            </div>
+            <div class="col-md-3">
+                <a href="{{ url_for('add_vial') }}" class="btn btn-lg btn-warning w-100">
+                    <i class="bi bi-box"></i><br>Add Vial
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="{{ url_for('add_protocol') }}" class="btn btn-lg btn-primary w-100">
                     <i class="bi bi-calendar-plus"></i><br>New Protocol
                 </a>
             </div>
@@ -197,15 +206,15 @@
 <div class="row">
     <!-- Active Protocols -->
     <div class="col-md-6 mb-4">
-        <div class="card h-100 shadow-sm">
-            <div class="card-header bg-light">
+        <div class="card h-100">
+            <div class="card-header">
                 <h5 class="mb-0"><i class="bi bi-calendar-check"></i> Active Protocols</h5>
             </div>
             <div class="card-body">
                 {% if protocols %}
                     <div class="list-group list-group-flush">
                         {% for protocol in protocols %}
-                        <a href="{{ url_for('protocol_detail', protocol_id=protocol.id) }}" 
+                        <a href="{{ url_for('protocol_detail', protocol_id=protocol.id) }}"
                            class="list-group-item list-group-item-action">
                             <div class="d-flex w-100 justify-content-between">
                                 <h6 class="mb-1">{{ protocol.name }}</h6>
@@ -226,7 +235,7 @@
                     </div>
                 {% else %}
                     <p class="text-muted text-center py-4">
-                        No active protocols. 
+                        No active protocols.
                         <a href="{{ url_for('add_protocol') }}">Create one now</a>
                     </p>
                 {% endif %}
@@ -236,8 +245,8 @@
 
     <!-- Recent Injections -->
     <div class="col-md-6 mb-4">
-        <div class="card h-100 shadow-sm">
-            <div class="card-header bg-light">
+        <div class="card h-100">
+            <div class="card-header">
                 <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Injections</h5>
             </div>
             <div class="card-body">
@@ -250,7 +259,7 @@
                                 <small>{{ injection.timestamp.strftime('%m/%d %H:%M') }}</small>
                             </div>
                             <p class="mb-1 small">
-                                <strong>{{ injection.dose_mcg }} mcg</strong> 
+                                <strong>{{ injection.dose_mcg }} mcg</strong>
                                 ({{ injection.volume_ml }} ml)
                                 {% if injection.injection_site %}
                                 | {{ injection.injection_site }}
@@ -269,7 +278,7 @@
                     </div>
                 {% else %}
                     <p class="text-muted text-center py-4">
-                        No injections logged yet. 
+                        No injections logged yet.
                         <a href="{{ url_for('log_injection') }}">Log your first one</a>
                     </p>
                 {% endif %}
@@ -278,85 +287,33 @@
     </div>
 </div>
 
-<!-- Scientific Research Links -->
-<div class="row mt-4 mb-4">
-    <div class="col-12">
-        <div class="card shadow-sm">
-            <div class="card-header bg-light">
-                <h5 class="mb-0"><i class="bi bi-journal-medical"></i> Peptides in Research</h5>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <h6 class="mb-2"><i class="bi bi-newspaper text-primary"></i> News & Articles</h6>
-                        <ul class="list-unstyled small">
-                            <li class="mb-2">
-                                <a href="https://www.science.org/search?query=peptides" target="_blank" class="text-decoration-none">
-                                    <i class="bi bi-box-arrow-up-right"></i> Science.org - Peptide Research
-                                </a>
-                            </li>
-                            <li class="mb-2">
-                                <a href="https://pubmed.ncbi.nlm.nih.gov/?term=therapeutic+peptides" target="_blank" class="text-decoration-none">
-                                    <i class="bi bi-box-arrow-up-right"></i> PubMed - Therapeutic Peptides
-                                </a>
-                            </li>
-                            <li class="mb-2">
-                                <a href="https://www.nature.com/subjects/peptides" target="_blank" class="text-decoration-none">
-                                    <i class="bi bi-box-arrow-up-right"></i> Nature - Peptides
-                                </a>
-                            </li>
-                        </ul>
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        <h6 class="mb-2"><i class="bi bi-search text-success"></i> Scientific Studies</h6>
-                        <ul class="list-unstyled small">
-                            <li class="mb-2">
-                                <a href="https://pubmed.ncbi.nlm.nih.gov/?term=BPC-157" target="_blank" class="text-decoration-none">
-                                    <i class="bi bi-box-arrow-up-right"></i> BPC-157 Studies
-                                </a>
-                            </li>
-                            <li class="mb-2">
-                                <a href="https://pubmed.ncbi.nlm.nih.gov/?term=TB-500+thymosin" target="_blank" class="text-decoration-none">
-                                    <i class="bi bi-box-arrow-up-right"></i> TB-500 Research
-                                </a>
-                            </li>
-                            <li class="mb-2">
-                                <a href="https://pubmed.ncbi.nlm.nih.gov/?term=semaglutide" target="_blank" class="text-decoration-none">
-                                    <i class="bi bi-box-arrow-up-right"></i> Semaglutide Studies
-                                </a>
-                            </li>
-                        </ul>
-                    </div>
-                </div>
-                <p class="text-muted small mb-0 mt-2">
-                    <i class="bi bi-info-circle"></i> Educational purposes only. Always consult healthcare professionals.
-                </p>
-            </div>
+<!-- Coaching CTA (now in content, so it actually renders) -->
+<div class="row mt-5" id="coaching">
+  <div class="col-12">
+    <div class="card shadow-sm border-0">
+      <div class="card-body p-4">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+          <div>
+            <h4 class="mb-1">Coaching</h4>
+            <p class="text-muted mb-0">Want a personalized plan and someone to answer questions on peptides, training, recovery, and nutrition?</p>
+          </div>
+          <a class="btn btn-primary btn-lg" href="{{ url_for('coaching') }}"><i class="bi bi-calendar2-check me-2"></i>Book a coaching call</a>
         </div>
+      </div>
     </div>
+  </div>
 </div>
 
-<!-- Coaching CTA -->
-<div class="row mb-5">
-    <div class="col-12">
-        <div class="card shadow-sm border-primary">
-            <div class="card-body p-4">
-                <div class="row align-items-center">
-                    <div class="col-lg-8 mb-3 mb-lg-0">
-                        <h4 class="mb-2"><i class="bi bi-person-video2 text-primary"></i> One-on-One Coaching</h4>
-                        <p class="text-muted mb-0">
-                            Want to maximize your peptide results? Get personalized guidance on protocols, training, nutrition, and peptide stacking from experienced coaches.
-                        </p>
-                    </div>
-                    <div class="col-lg-4 text-lg-end">
-                        <a class="btn btn-primary btn-lg w-100 w-lg-auto" href="{{ url_for('coaching') }}">
-                            <i class="bi bi-calendar2-check me-2"></i>Book Coaching Call
-                        </a>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+{% endblock %}
 
+{% block scripts %}
+<script>
+  (function(){
+    const slider = document.getElementById("ageSlider");
+    const badge = document.getElementById("ageBadge");
+    if(!slider || !badge) return;
+    badge.textContent = slider.value;
+    slider.addEventListener("input", () => badge.textContent = slider.value);
+  })();
+</script>
 {% endblock %}

@@ -615,7 +615,85 @@ def api_log_food():
 @app.route("/peptides")
 @login_required
 def peptides():
-    return render_if_exists("peptides.html", fallback_endpoint="dashboard")
+    """Peptide library page.
+
+    The template expects a `peptides` iterable (and optionally `peptides_json`).
+    If your DB helper is unavailable, we still render the page with an empty list.
+    """
+    peptides_list: list[Any] = []
+    peptides_json: str = "[]"
+
+    try:
+        from database import PeptideDB  # type: ignore
+
+        db = get_session(db_url)
+        pdb = PeptideDB(db)
+        peptides_list = getattr(pdb, "list_peptides", lambda: [])()
+    except Exception:
+        app.logger.exception("Failed to load peptides from DB")
+
+    try:
+        payload = []
+        for p in peptides_list:
+            payload.append(
+                {
+                    "id": getattr(p, "id", None),
+                    "name": getattr(p, "name", ""),
+                    "category": getattr(p, "category", None),
+                    "summary": getattr(p, "summary", "") or getattr(p, "description", "") or "",
+                    "benefits": getattr(p, "benefits", "") or "",
+                    # Optional gating fields if present in your DB model
+                    "locked": bool(getattr(p, "locked", False) or getattr(p, "is_locked", False)),
+                    "tier": getattr(p, "tier", None),
+                }
+            )
+        peptides_json = json.dumps(payload)
+    except Exception:
+        app.logger.exception("Failed to serialize peptides")
+        peptides_json = "[]"
+
+    return render_if_exists(
+        "peptides.html",
+        peptides=peptides_list,
+        peptides_json=peptides_json,
+        fallback_endpoint="dashboard",
+    )
+
+@app.route("/api/peptides")
+@login_required
+def api_peptides():
+    """JSON API used by the Peptides page/compare UI."""
+    try:
+        from database import PeptideDB  # type: ignore
+
+        db = get_session(db_url)
+        pdb = PeptideDB(db)
+        peptides_list = getattr(pdb, "list_peptides", lambda: [])()
+    except Exception:
+        app.logger.exception("Failed to load peptides for API")
+        peptides_list = []
+
+    payload = []
+    for p in peptides_list:
+        payload.append(
+            {
+                "id": getattr(p, "id", None),
+                "name": getattr(p, "name", ""),
+                "category": getattr(p, "category", None),
+                "summary": getattr(p, "summary", "") or getattr(p, "description", "") or "",
+                "benefits": getattr(p, "benefits", "") or "",
+                "locked": bool(getattr(p, "locked", False) or getattr(p, "is_locked", False)),
+                "tier": getattr(p, "tier", None),
+            }
+        )
+    return jsonify(payload)
+
+# Backwards-compatible alias in case templates still reference url_for('pep_ai')
+@app.route("/pep-ai")
+@login_required
+def pep_ai():
+    return redirect(url_for("chat"))
+
 
 @app.route("/calculator")
 @login_required

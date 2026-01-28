@@ -1,155 +1,121 @@
 {% extends "base.html" %}
 
-{% block title %}Peptides - Peptide Tracker{% endblock %}
-
-{% block extra_css %}
-<style>
-.peptide-card{transition:transform .15s ease, box-shadow .15s ease;}
-.peptide-card:hover{transform:translateY(-3px);box-shadow:0 .5rem 1rem rgba(0,0,0,.12)!important;}
-</style>
-{% endblock %}
+{% block title %}Peptide Library - PeptideTracker.ai{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-    <h1 class="mb-0">
-        <i class="bi bi-list-ul"></i> Peptide Library
-    </h1>
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-3">
+  <div>
+    <h1 class="mb-1"><i class="bi bi-list-task"></i> Peptide Library</h1>
+    <div class="text-muted">Select 2–4 peptides to compare side-by-side with visuals. (Educational UI only — not medical advice.)</div>
+  </div>
 
-    <button id="compareBtn" class="btn btn-primary" disabled>
-        <i class="bi bi-bar-chart-fill"></i> Compare (<span id="compareCount">0</span>)
-    </button>
+  <button class="btn btn-primary d-inline-flex align-items-center gap-2" id="compareBtn" disabled>
+    <i class="bi bi-bar-chart"></i>
+    <span>Compare (<span id="compareCount">0</span>)</span>
+  </button>
 </div>
 
-<p class="text-muted mb-4">
-    Select 2–4 peptides to compare side-by-side with visuals. (Educational UI only — not medical advice.)
-</p>
-
-<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
-    {% for peptide in peptides %}
-    <div class="col">
-        <div class="card h-100 shadow-sm peptide-card">
-            <div class="card-header d-flex align-items-center justify-content-between">
-                {# keep the checkbox for JS/state, but hide it and expose a clearer button in the footer #}
-                <input class="compare-check d-none" type="checkbox" value="{{ peptide.id }}" id="cmp{{ peptide.id }}">
-
-                <span class="badge route-badge">
-                    <span class="vial-icon" aria-hidden="true"></span>
-                    {{ peptide.primary_route.value if peptide.primary_route else '—' }}
-                </span>
-
-                <span class="badge dose-badge">
-                    {% if peptide.typical_dose_min %}
-                        {{ peptide.typical_dose_min }}{% if peptide.typical_dose_max %}-{{ peptide.typical_dose_max }}{% endif %} mcg
-                    {% else %}
-                        Dose —
-                    {% endif %}
-                </span>
-            </div>
-
-            <div class="card-body">
-                <h5 class="card-title mb-1">{{ peptide.name }}</h5>
-                <div class="text-muted small mb-2">{{ peptide.common_name }}</div>
-
-                <p class="card-text small">
-                    {{ peptide.primary_benefits[:150] }}{% if peptide.primary_benefits|length > 150 %}...{% endif %}
-                </p>
-
-                <ul class="list-unstyled small mb-0">
-                    {% if peptide.typical_dose_min %}
-                    <li><strong>Dose:</strong> {{ peptide.typical_dose_min }}{% if peptide.typical_dose_max %}-{{ peptide.typical_dose_max }}{% endif %} mcg</li>
-                    {% endif %}
-                    {% if peptide.frequency_per_day %}
-                    <li><strong>Frequency:</strong> {{ peptide.frequency_per_day }}x/day</li>
-                    {% endif %}
-                    {% if peptide.half_life_hours %}
-                    <li><strong>Half-life:</strong> {{ peptide.half_life_hours }} hours</li>
-                    {% endif %}
-                </ul>
-            </div>
-
-            <div class="card-footer d-flex gap-2 align-items-center peptide-card-footer">
-                <!-- Hidden checkbox drives selection logic; button toggles it for a clearer UX -->
-                <input class="compare-check d-none" type="checkbox" value="{{ peptide.id }}" id="cmp{{ peptide.id }}">
-
-                <button class="btn btn-sm btn-outline-primary compare-toggle" type="button" data-target="cmp{{ peptide.id }}">
-                    <span class="compare-toggle-text">Compare</span>
-                </button>
-
-                <a href="{{ url_for('peptide_detail', peptide_id=peptide.id) }}" class="btn btn-sm btn-primary ms-auto">
-                    View Details →
-                </a>
-            </div>
-        </div>
+<div class="row g-3 mb-3">
+  <div class="col-12 col-lg-6">
+    <div class="input-group">
+      <span class="input-group-text"><i class="bi bi-search"></i></span>
+      <input class="form-control" id="filterInput" placeholder="Search peptides…">
     </div>
-    {% endfor %}
+  </div>
+  <div class="col-12 col-lg-6 text-lg-end">
+    <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left"></i> Back to Dashboard</a>
+  </div>
 </div>
+
+{% if peptides and peptides|length > 0 %}
+<div class="list-group" id="peptideList">
+  {% for p in peptides %}
+  <label class="list-group-item d-flex align-items-center justify-content-between gap-3 peptide-row" data-name="{{ (p.name or '')|lower }}">
+    <div class="d-flex align-items-center gap-3">
+      <input class="form-check-input mt-0 compare-check" type="checkbox" value="{{ p.id }}">
+      <div>
+        <div class="fw-semibold">{{ p.name }}</div>
+        {% if p.summary %}
+          <div class="text-muted small">{{ p.summary }}</div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="text-muted small">
+      {% if p.category %}<span class="badge text-bg-light border">{{ p.category }}</span>{% endif %}
+    </div>
+  </label>
+  {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-warning">
+  No peptides found. This page expects your app to pass a <code>peptides</code> list to the template.
+</div>
+{% endif %}
+
+<div class="modal fade" id="compareModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-bar-chart"></i> Compare</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="compareSelection" class="text-muted">Select 2–4 peptides to compare.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
-{% block extra_js %}
+{% block scripts %}
 <script>
-(function() {
-  const maxCompare = 4;
-  const minCompare = 2;
+(function(){
+  const filterInput = document.getElementById('filterInput');
+  const rows = Array.from(document.querySelectorAll('.peptide-row'));
+  const checks = Array.from(document.querySelectorAll('.compare-check'));
+  const compareBtn = document.getElementById('compareBtn');
+  const compareCount = document.getElementById('compareCount');
+  const selectionEl = document.getElementById('compareSelection');
 
-  const btn = document.getElementById("compareBtn");
-  const countEl = document.getElementById("compareCount");
-  const checks = Array.from(document.querySelectorAll(".compare-check"));
-
-  function selectedIds() {
-    return checks.filter(c => c.checked).map(c => c.value);
-  }
-
-  function refresh() {
-    const ids = selectedIds();
-    countEl.textContent = ids.length;
-    btn.disabled = !(ids.length >= minCompare && ids.length <= maxCompare);
-
-    // Update per-card "Compare" toggle button state
-    document.querySelectorAll(".compare-toggle").forEach(b => {
-      const targetId = b.getAttribute("data-target");
-      const cb = document.getElementById(targetId);
-      const active = !!(cb && cb.checked);
-      b.classList.toggle("btn-outline-primary", !active);
-      b.classList.toggle("btn-success", active);
-      const label = b.querySelector(".compare-label");
-      if (label) label.textContent = active ? "Added" : "Compare";
-    });
-
-    // Prevent selecting >4
-    if (ids.length >= maxCompare) {
+  function updateCompareState(){
+    const selected = checks.filter(c => c.checked).map(c => c.value);
+    compareCount.textContent = String(selected.length);
+    compareBtn.disabled = !(selected.length >= 2 && selected.length <= 4);
+    if(selected.length >= 4){
       checks.filter(c => !c.checked).forEach(c => c.disabled = true);
     } else {
       checks.forEach(c => c.disabled = false);
     }
+    if(selectionEl){
+      selectionEl.textContent = selected.length ? ("Selected IDs: " + selected.join(', ')) : "Select 2–4 peptides to compare.";
+    }
   }
 
-  checks.forEach(c => c.addEventListener("change", refresh));
-
-  // Toggle-style compare button
-  document.querySelectorAll(".compare-toggle").forEach(b => {
-    b.addEventListener("click", () => {
-      const targetId = b.getAttribute("data-target");
-      const cb = document.getElementById(targetId);
-      if (!cb) return;
-
-      // If max reached, only allow unchecking
-      const ids = selectedIds();
-      if (!cb.checked && ids.length >= maxCompare) {
-        return;
-      }
-
-      cb.checked = !cb.checked;
-      refresh();
+  if(filterInput){
+    filterInput.addEventListener('input', () => {
+      const q = (filterInput.value || '').trim().toLowerCase();
+      rows.forEach(r => {
+        const name = r.getAttribute('data-name') || '';
+        r.style.display = (!q || name.includes(q)) ? '' : 'none';
+      });
     });
-  });
+  }
 
-  btn.addEventListener("click", () => {
-    const ids = selectedIds();
-    const qs = encodeURIComponent(ids.join(","));
-    window.location.href = "{{ url_for('compare') }}" + "?ids=" + qs;
-  });
+  checks.forEach(c => c.addEventListener('change', updateCompareState));
+  updateCompareState();
 
-  refresh();
+  if(compareBtn){
+    compareBtn.addEventListener('click', () => {
+      const modalEl = document.getElementById('compareModal');
+      if(!modalEl) return;
+      const modal = new bootstrap.Modal(modalEl);
+      modal.show();
+    });
+  }
 })();
 </script>
 {% endblock %}
