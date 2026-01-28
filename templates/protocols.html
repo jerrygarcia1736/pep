@@ -1,235 +1,140 @@
 {% extends "base.html" %}
-
-{% block title %}Protocols - Peptide Tracker{% endblock %}
-
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-4">
-  <h1 class="mb-0"><i class="bi bi-calendar-check"></i> My Protocols</h1>
-  <a href="{{ url_for('add_protocol') }}" class="btn btn-primary">
-    <i class="bi bi-plus-circle"></i> New Protocol
-  </a>
-</div>
-
-<p class="text-muted mb-4">
-  Manage your peptide protocols. Track dosing schedules, start/end dates, and monitor your progress.
-</p>
-
-{% if protocols %}
-<!-- Active Protocols -->
-<div class="row">
-  {% for protocol in protocols %}
-  <div class="col-md-6 col-lg-4 mb-4">
-    <div class="card h-100 shadow-sm">
-      <div class="card-header bg-primary text-white">
-        <h5 class="mb-0">{{ protocol.name }}</h5>
-      </div>
-      <div class="card-body">
-        <h6 class="text-muted mb-3">{{ protocol.peptide.name }}</h6>
-        
-        <div class="mb-3">
-          <div class="d-flex justify-content-between mb-2">
-            <span class="text-muted">Dose:</span>
-            <span class="fw-bold">{{ protocol.dose_mcg }} mcg</span>
-          </div>
-          <div class="d-flex justify-content-between mb-2">
-            <span class="text-muted">Frequency:</span>
-            <span class="fw-bold">{{ protocol.frequency_per_day }}x per day</span>
-          </div>
-          <div class="d-flex justify-content-between mb-2">
-            <span class="text-muted">Started:</span>
-            <span>{{ protocol.start_date.strftime('%Y-%m-%d') }}</span>
-          </div>
-          {% if protocol.end_date %}
-          <div class="d-flex justify-content-between mb-2">
-            <span class="text-muted">Ends:</span>
-            <span>{{ protocol.end_date.strftime('%Y-%m-%d') }}</span>
-          </div>
-          {% endif %}
-        </div>
-        
-        {% if protocol.notes %}
-        <div class="small text-muted mb-3">
-          <strong>Notes:</strong> {{ protocol.notes[:100] }}{% if protocol.notes|length > 100 %}...{% endif %}
-        </div>
-        {% endif %}
-      </div>
-      <div class="card-footer bg-transparent">
-        <div class="d-flex justify-content-between">
-          <a href="{{ url_for('protocol_detail', protocol_id=protocol.id) }}" class="btn btn-sm btn-outline-primary">
-            <i class="bi bi-eye"></i> View Details
-          </a>
-          <a href="{{ url_for('edit_protocol', protocol_id=protocol.id) }}" class="btn btn-sm btn-outline-secondary">
-            <i class="bi bi-pencil"></i> Edit
-          </a>
-        </div>
-      </div>
+<div class="container py-4">
+  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <div>
+      <h1 class="h3 mb-1">Protocols</h1>
+      <div class="text-muted">Create and manage your active protocols.</div>
     </div>
-  </div>
-  {% endfor %}
-</div>
-{% else %}
-<!-- No Protocols - Show Starter Protocols -->
-<div class="alert alert-info mb-4">
-  <i class="bi bi-info-circle"></i> You don't have any protocols yet. Get started with our recommended beginner protocols below!
-</div>
-
-<h3 class="mb-3"><i class="bi bi-star-fill text-warning"></i> Beginner Protocols</h3>
-<p class="text-muted mb-4">These are popular peptide protocols recommended for beginners. Click "Start This Protocol" to add it to your account.</p>
-
-<div class="row">
-  <!-- BPC-157 Starter Protocol -->
-  <div class="col-md-6 mb-4">
-    <div class="card h-100 shadow-sm border-success">
-      <div class="card-header bg-success text-white">
-        <h5 class="mb-0"><i class="bi bi-heart-pulse"></i> BPC-157 Healing Protocol</h5>
-      </div>
-      <div class="card-body">
-        <h6 class="text-success mb-3">Body Protection Compound-157</h6>
-        
-        <div class="mb-3">
-          <h6 class="fw-bold">Recommended Dosing:</h6>
-          <ul class="list-unstyled">
-            <li><i class="bi bi-check-circle text-success"></i> <strong>Dose:</strong> 250-500 mcg</li>
-            <li><i class="bi bi-check-circle text-success"></i> <strong>Frequency:</strong> 1-2x per day</li>
-            <li><i class="bi bi-check-circle text-success"></i> <strong>Duration:</strong> 4-6 weeks</li>
-            <li><i class="bi bi-check-circle text-success"></i> <strong>Route:</strong> Subcutaneous injection</li>
-          </ul>
-        </div>
-        
-        <div class="mb-3">
-          <h6 class="fw-bold">Primary Benefits:</h6>
-          <ul class="small">
-            <li>Accelerated healing of muscles, tendons, and ligaments</li>
-            <li>Gut health support</li>
-            <li>Anti-inflammatory effects</li>
-            <li>Joint and connective tissue repair</li>
-          </ul>
-        </div>
-        
-        <div class="alert alert-warning small">
-          <i class="bi bi-exclamation-triangle"></i> <strong>Note:</strong> This is educational information only. Consult with a healthcare professional before starting any peptide protocol.
-        </div>
-      </div>
-      <div class="card-footer bg-transparent">
-        <a href="{{ url_for('add_protocol') }}" class="btn btn-success w-100">
-          <i class="bi bi-plus-circle"></i> Start This Protocol
-        </a>
-      </div>
-    </div>
+    <a href="{{ url_for('add_protocol') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-1"></i> New Protocol
+    </a>
   </div>
 
-  <!-- TB-500 Starter Protocol -->
-  <div class="col-md-6 mb-4">
-    <div class="card h-100 shadow-sm border-info">
-      <div class="card-header bg-info text-white">
-        <h5 class="mb-0"><i class="bi bi-shield-plus"></i> TB-500 Recovery Protocol</h5>
-      </div>
-      <div class="card-body">
-        <h6 class="text-info mb-3">Thymosin Beta-4</h6>
-        
-        <div class="mb-3">
-          <h6 class="fw-bold">Recommended Dosing:</h6>
-          <ul class="list-unstyled">
-            <li><i class="bi bi-check-circle text-info"></i> <strong>Loading Phase:</strong> 2-5 mg, 2x per week</li>
-            <li><i class="bi bi-check-circle text-info"></i> <strong>Maintenance:</strong> 2-5 mg, 1x per week</li>
-            <li><i class="bi bi-check-circle text-info"></i> <strong>Duration:</strong> 4-6 weeks loading, then maintenance</li>
-            <li><i class="bi bi-check-circle text-info"></i> <strong>Route:</strong> Subcutaneous injection</li>
-          </ul>
-        </div>
-        
-        <div class="mb-3">
-          <h6 class="fw-bold">Primary Benefits:</h6>
-          <ul class="small">
-            <li>Promotes healing and tissue repair</li>
-            <li>Reduces inflammation</li>
-            <li>Improves flexibility and joint mobility</li>
-            <li>Accelerates recovery from injuries</li>
-          </ul>
-        </div>
-        
-        <div class="alert alert-warning small">
-          <i class="bi bi-exclamation-triangle"></i> <strong>Note:</strong> This is educational information only. Consult with a healthcare professional before starting any peptide protocol.
-        </div>
-      </div>
-      <div class="card-footer bg-transparent">
-        <a href="{{ url_for('add_protocol') }}" class="btn btn-info w-100">
-          <i class="bi bi-plus-circle"></i> Start This Protocol
-        </a>
-      </div>
-    </div>
+  <!-- Beginner templates (free) -->
+  <div class="d-flex align-items-center gap-2 mb-2">
+    <h2 class="h4 mb-0"><span class="me-1">⭐</span>Beginner Protocols</h2>
+    <span class="badge bg-success">Free</span>
   </div>
-</div>
+  <p class="text-muted mb-3">
+    Educational starter templates. Click <strong>Start This Protocol</strong> to add it to your account.
+  </p>
 
-<!-- BPC-157 + TB-500 Stack - Advanced -->
-<div class="card shadow-sm border-primary mb-4">
-  <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-    <h5 class="mb-0"><i class="bi bi-layers"></i> Advanced: BPC-157 + TB-500 Stack</h5>
-    <span class="badge bg-warning text-dark">
-      <i class="bi bi-star-fill"></i> Paid Tier
-    </span>
-  </div>
-  <div class="card-body">
-    <div class="row">
-      <div class="col-md-8">
-        <h6 class="fw-bold mb-3">The Ultimate Healing & Recovery Stack</h6>
-        <p class="mb-3">Combining BPC-157 and TB-500 creates a synergistic effect for enhanced healing and recovery. Many users report better results when stacking these two peptides together.</p>
-        
-        <div class="row">
-          <div class="col-md-6">
-            <h6 class="fw-bold">BPC-157:</h6>
-            <ul class="small">
-              <li>250-500 mcg, 1-2x daily</li>
-              <li>Targets localized healing</li>
-              <li>Gut health support</li>
+  <div class="row g-3">
+    {% for t in protocol_templates %}
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm h-100 border-0">
+        <div class="card-header text-white" style="background: {{ t.header_color }};">
+          <div class="d-flex align-items-center gap-2">
+            <i class="{{ t.icon }} fs-5"></i>
+            <div class="fw-semibold">{{ t.title }}</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="text-primary fw-semibold">{{ t.subtitle }}</div>
+
+          <div class="mt-3">
+            <div class="fw-bold mb-2">Recommended Dosing:</div>
+            <div class="d-grid gap-2">
+              {% for item in t.dosing %}
+              <div class="d-flex align-items-start gap-2">
+                <i class="bi bi-check-circle text-success mt-1"></i>
+                <div><strong>{{ item.label }}:</strong> {{ item.value }}</div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <div class="fw-bold mb-2">Primary Benefits:</div>
+            <ul class="mb-0">
+              {% for b in t.benefits %}
+              <li>{{ b }}</li>
+              {% endfor %}
             </ul>
           </div>
-          <div class="col-md-6">
-            <h6 class="fw-bold">TB-500:</h6>
-            <ul class="small">
-              <li>2-5 mg, 2x weekly</li>
-              <li>Systemic recovery</li>
-              <li>Flexibility enhancement</li>
-            </ul>
+
+          <div class="alert alert-warning mt-3 mb-0" style="border-radius:12px;">
+            <div class="d-flex gap-2">
+              <div class="fw-bold">⚠️ Note:</div>
+              <div>This is educational information only. Consult with a healthcare professional before starting any peptide protocol.</div>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="col-md-4 d-flex align-items-center">
-        <div class="w-100">
-          <div class="alert alert-warning mb-2 small">
-            <i class="bi bi-lock-fill"></i> Upgrade to paid tier to unlock advanced stacks
-          </div>
-          <a href="{{ url_for('add_protocol') }}" class="btn btn-primary w-100 disabled">
-            <i class="bi bi-lock-fill"></i> Upgrade Required
-          </a>
+        <div class="card-footer bg-white border-0 pt-0">
+          <form method="post" action="{{ url_for('start_protocol_template', slug=t.slug) }}">
+            <button type="submit" class="btn w-100 text-white" style="background: {{ t.header_color }};">
+              <i class="bi bi-plus-circle me-1"></i> Start This Protocol
+            </button>
+          </form>
         </div>
       </div>
     </div>
+    {% endfor %}
   </div>
-</div>
 
-<!-- Learn More Section -->
-<div class="card bg-light">
-  <div class="card-body">
-    <h5 class="mb-3"><i class="bi bi-book"></i> Want to Learn More?</h5>
-    <div class="row">
-      <div class="col-md-4 mb-3">
-        <a href="{{ url_for('peptides') }}" class="btn btn-outline-primary w-100">
-          <i class="bi bi-list-ul"></i> Browse All Peptides
-        </a>
+  <!-- Advanced (paid) -->
+  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-5 mb-2">
+    <h2 class="h4 mb-0">Advanced Protocols</h2>
+    <span class="badge bg-warning text-dark px-3 py-2" style="border-radius:999px;">⭐ Paid Platinum Users Only</span>
+  </div>
+  <p class="text-muted mb-3">Locked protocol blends and advanced stacks are available in the paid Platinum tier.</p>
+
+  <div class="card shadow-sm border-0">
+    <div class="card-body d-flex align-items-center justify-content-between flex-wrap gap-2">
+      <div class="d-flex align-items-center gap-2">
+        <i class="bi bi-lock-fill text-muted"></i>
+        <div>
+          <div class="fw-semibold">GHKCu–BPC Blend</div>
+          <div class="text-muted small">Upgrade to unlock full details and one-click setup.</div>
+        </div>
       </div>
-      <div class="col-md-4 mb-3">
-        <a href="{{ url_for('chat') }}" class="btn btn-outline-primary w-100">
-          <i class="bi bi-chat-dots-fill"></i> Ask Pep AI
-        </a>
-      </div>
-      <div class="col-md-4 mb-3">
-        <a href="{{ url_for('calculator') }}" class="btn btn-outline-primary w-100">
-          <i class="bi bi-calculator"></i> Peptide Calculator
-        </a>
-      </div>
+      <a class="btn btn-outline-primary disabled" href="#" aria-disabled="true">
+        Upgrade to Platinum
+      </a>
     </div>
   </div>
-</div>
-{% endif %}
 
+  <!-- Existing active protocols list -->
+  <div class="mt-5">
+    <h2 class="h4 mb-3">Your Active Protocols</h2>
+    {% if protocols and protocols|length > 0 %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Peptide</th>
+              <th>Dose</th>
+              <th>Frequency</th>
+              <th>Started</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in protocols %}
+            <tr>
+              <td class="fw-semibold">{{ p.name }}</td>
+              <td>{{ p.peptide.name }}</td>
+              <td>{{ p.dose_mcg }} mcg</td>
+              <td>{{ p.frequency_per_day }}× / day</td>
+              <td>{{ p.start_date.strftime("%Y-%m-%d") if p.start_date else "" }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('protocol_detail', protocol_id=p.id) }}">
+                  View
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="alert alert-light border" style="border-radius:12px;">
+        No active protocols yet. <a href="{{ url_for('add_protocol') }}">Create one now</a>.
+      </div>
+    {% endif %}
+  </div>
+
+</div>
 {% endblock %}
