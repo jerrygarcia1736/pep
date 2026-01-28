@@ -11,7 +11,7 @@ import os
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from sqlalchemy import Column, Integer, String, DateTime, create_engine
-from models import get_session
+from models import get_session, Peptide
 from models import Base as ModelBase
 
 from database import PeptideDB
