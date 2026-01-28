@@ -52,12 +52,7 @@
     <div class="fw-semibold">
       <i class="bi bi-sliders"></i> Age Slider (Recommendations)
     </div>
-    <div class="d-flex align-items-center gap-2">
-      <span class="badge text-bg-secondary" id="ageBadge">35</span>
-      <span class="badge bg-warning text-dark">
-        <i class="bi bi-star-fill"></i> Paid Version Only
-      </span>
-    </div>
+    <span class="badge text-bg-secondary" id="ageBadge">35</span>
   </div>
   <div class="card-body">
     <div class="row g-3 align-items-center">
@@ -95,9 +90,11 @@
       </div>
 
       <div class="col-12 col-lg-6">
-        <div class="d-flex align-items-center justify-content-between">
-          <div class="fw-semibold">Suggested “start here” list</div>
-          <div class="small text-muted" id="recoStatus">Loading…</div>
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <div class="fw-semibold">Suggested "start here" list</div>
+          <span class="badge bg-warning text-dark">
+            <i class="bi bi-star-fill"></i> Paid Version Only
+          </span>
         </div>
         <div class="list-group mt-2" id="recoList"></div>
       </div>
@@ -230,9 +227,8 @@
   const slider = document.getElementById("ageSlider");
   const badge = document.getElementById("ageBadge");
   const list = document.getElementById("recoList");
-  const status = document.getElementById("recoStatus");
 
-  if (!slider || !badge || !list || !status) return;
+  if (!slider || !badge || !list) return;
 
   let t = null;
 
@@ -244,7 +240,6 @@
 
   async function load(age) {
     badge.textContent = age;
-    status.textContent = "Loading…";
     list.innerHTML = "";
 
     try {
@@ -254,12 +249,10 @@
 
       const items = data.items || [];
       if (!items.length) {
-        status.textContent = "No data";
         list.innerHTML = `<div class="text-muted small">No peptides found to recommend.</div>`;
         return;
       }
 
-      status.textContent = `Top ${items.length}`;
 
       list.innerHTML = items.map(it => `
         <a class="list-group-item list-group-item-action d-flex gap-3 align-items-center" href="/peptides/${it.id}">
@@ -274,8 +267,7 @@
         </a>
       `).join("");
     } catch (e) {
-      status.textContent = "Coming Soon";
-      list.innerHTML = `<div class="text-muted small text-center py-3"><i class="bi bi-clock-history"></i> Coming Soon</div>`;
+      list.innerHTML = `<div class="text-muted small text-center py-3"><i class="bi bi-lock-fill"></i> Premium feature - Upgrade to unlock personalized recommendations</div>`;
     }
   }
 
