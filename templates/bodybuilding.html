@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+
+{% block title %}Bodybuilding - Peptide Tracker{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<div class="text-center mb-5">
+    <h1 class="display-4 mb-3">
+        <i class="bi bi-heart-pulse"></i> Peptides for Bodybuilding
+    </h1>
+    <p class="lead text-muted mb-4">
+        Professional-grade peptide protocols for serious athletes. From bulking to contest prep, optimize every phase of your training.
+    </p>
+    
+    {% if not user.platinum_tier %}
+    <div class="alert alert-warning d-inline-block">
+        <i class="bi bi-lock-fill"></i> <strong>Platinum Feature</strong> - Upgrade to unlock advanced bodybuilding protocols
+    </div>
+    {% endif %}
+</div>
+
+{% if user.platinum_tier %}
+<!-- PLATINUM USERS: Full Content -->
+<div class="row mb-4">
+    <!-- Training Phase Protocols -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 border-success shadow-sm">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="bi bi-trophy"></i> Bulking Phase</h5>
+            </div>
+            <div class="card-body">
+                <h6 class="fw-bold">Growth Stack Protocol</h6>
+                <ul class="small mb-3">
+                    <li>Ipamorelin 200-300mcg 3x/day</li>
+                    <li>CJC-1295 100mcg 3x/day</li>
+                    <li>BPC-157 250-500mcg 2x/day</li>
+                    <li>TB-500 5mg 2x/week</li>
+                </ul>
+                <p class="small text-muted mb-3">
+                    <strong>Goal:</strong> Maximum muscle growth and recovery<br>
+                    <strong>Duration:</strong> 8-12 weeks
+                </p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('bodybuilding_protocol', phase='bulking') }}" class="btn btn-success w-100">
+                    View Full Protocol
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 border-danger shadow-sm">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0"><i class="bi bi-fire"></i> Cutting Phase</h5>
+            </div>
+            <div class="card-body">
+                <h6 class="fw-bold">Shredded Stack Protocol</h6>
+                <ul class="small mb-3">
+                    <li>AOD-9604 300-500mcg fasted AM</li>
+                    <li>Ipamorelin 200mcg 2x/day</li>
+                    <li>CJC-1295 100mcg 2x/day</li>
+                    <li>GHK-Cu 3mg 3x/week</li>
+                </ul>
+                <p class="small text-muted mb-3">
+                    <strong>Goal:</strong> Maximum fat loss, maintain muscle<br>
+                    <strong>Duration:</strong> 6-8 weeks
+                </p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('bodybuilding_protocol', phase='cutting') }}" class="btn btn-danger w-100">
+                    View Full Protocol
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 border-info shadow-sm">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="bi bi-shield-plus"></i> Recovery Phase</h5>
+            </div>
+            <div class="card-body">
+                <h6 class="fw-bold">Recovery Stack Protocol</h6>
+                <ul class="small mb-3">
+                    <li>TB-500 5mg 2x/week</li>
+                    <li>BPC-157 500mcg 2x/day</li>
+                    <li>GHK-Cu 3mg EOD</li>
+                    <li>Ipamorelin 100mcg at bedtime</li>
+                </ul>
+                <p class="small text-muted mb-3">
+                    <strong>Goal:</strong> Heal injuries, reduce inflammation<br>
+                    <strong>Duration:</strong> 4-6 weeks
+                </p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('bodybuilding_protocol', phase='recovery') }}" class="btn btn-info w-100">
+                    View Full Protocol
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Advanced Stacks Section -->
+<h3 class="mb-3"><i class="bi bi-layers-fill"></i> Advanced Stacking Protocols</h3>
+<div class="row mb-4">
+    <!-- More platinum content... -->
+</div>
+
+{% else %}
+<!-- FREE/PREMIUM USERS: Teaser Content with Blur -->
+<div class="position-relative">
+    <!-- Blurred Preview -->
+    <div style="filter: blur(8px); pointer-events: none; user-select: none;">
+        <div class="row mb-4">
+            <div class="col-md-4 mb-4">
+                <div class="card h-100 border-success">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">Bulking Phase</h5>
+                    </div>
+                    <div class="card-body">
+                        <h6>Growth Stack Protocol</h6>
+                        <ul class="small">
+                            <li>Ipamorelin 200-300mcg 3x/day</li>
+                            <li>CJC-1295 100mcg 3x/day</li>
+                            <li>BPC-157 250-500mcg 2x/day</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-4">
+                <div class="card h-100 border-danger">
+                    <div class="card-header bg-danger text-white">
+                        <h5 class="mb-0">Cutting Phase</h5>
+                    </div>
+                    <div class="card-body">
+                        <h6>Shredded Stack Protocol</h6>
+                        <ul class="small">
+                            <li>AOD-9604 300-500mcg fasted</li>
+                            <li>Ipamorelin 200mcg 2x/day</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-4">
+                <div class="card h-100 border-info">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0">Recovery Phase</h5>
+                    </div>
+                    <div class="card-body">
+                        <h6>Recovery Stack Protocol</h6>
+                        <ul class="small">
+                            <li>TB-500 5mg 2x/week</li>
+                            <li>BPC-157 500mcg 2x/day</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Upgrade Overlay -->
+    <div class="position-absolute top-50 start-50 translate-middle text-center" style="z-index: 10;">
+        <div class="card shadow-lg border-primary" style="min-width: 400px;">
+            <div class="card-body p-4">
+                <h3 class="mb-3">
+                    <i class="bi bi-lock-fill text-primary"></i> Upgrade to Platinum
+                </h3>
+                <p class="mb-4">Unlock professional bodybuilding protocols trusted by competitive athletes:</p>
+                
+                <div class="text-start mb-4">
+                    <div class="mb-2">✓ Training phase stacks (Bulk, Cut, Recovery)</div>
+                    <div class="mb-2">✓ Contest prep timelines</div>
+                    <div class="mb-2">✓ Advanced dosing calculator</div>
+                    <div class="mb-2">✓ Blood work guidelines</div>
+                    <div class="mb-2">✓ Side effect management</div>
+                    <div class="mb-2">✓ Real athlete results</div>
+                </div>
+                
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('upgrade', tier='platinum') }}" class="btn btn-primary btn-lg">
+                        <i class="bi bi-star-fill"></i> Upgrade to Platinum - $19.99/mo
+                    </a>
+                    <small class="text-muted">Cancel anytime • 30-day money back guarantee</small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- What You Get Section -->
+<div class="row mt-5 pt-5">
+    <div class="col-md-12">
+        <h3 class="text-center mb-4">What's Included in Platinum</h3>
+    </div>
+    
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 text-center">
+            <div class="card-body">
+                <i class="bi bi-clipboard-check text-primary" style="font-size: 3rem;"></i>
+                <h5 class="mt-3">Training Phase Protocols</h5>
+                <p class="text-muted">Optimized peptide stacks for bulking, cutting, and recovery phases</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 text-center">
+            <div class="card-body">
+                <i class="bi bi-calculator text-success" style="font-size: 3rem;"></i>
+                <h5 class="mt-3">Advanced Calculator</h5>
+                <p class="text-muted">Personalized dosing based on body weight, BF%, and training goals</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 text-center">
+            <div class="card-body">
+                <i class="bi bi-graph-up text-danger" style="font-size: 3rem;"></i>
+                <h5 class="mt-3">Contest Prep Timeline</h5>
+                <p class="text-muted">12-week peptide protocols for competition preparation</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Social Proof -->
+<div class="card bg-light mt-4">
+    <div class="card-body text-center">
+        <h4 class="mb-3">Trusted by Competitive Athletes</h4>
+        <div class="row">
+            <div class="col-md-4">
+                <p class="mb-0"><strong>1,000+</strong></p>
+                <small class="text-muted">Active Users</small>
+            </div>
+            <div class="col-md-4">
+                <p class="mb-0"><strong>4.9/5</strong></p>
+                <small class="text-muted">User Rating</small>
+            </div>
+            <div class="col-md-4">
+                <p class="mb-0"><strong>100+</strong></p>
+                <small class="text-muted">Pro Athletes</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endif %}
+
+{% endblock %}

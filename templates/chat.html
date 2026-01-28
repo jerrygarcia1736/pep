@@ -1,11 +1,45 @@
 {% extends "base.html" %}
 
-{% block title %}AI Assistant - Peptide Tracker{% endblock %}
+{% block title %}Pep AI - Peptide Tracker{% endblock %}
 
 {% block content %}
-<h1 class="mb-4">
-    <i class="bi bi-chat-dots"></i> AI Peptide Assistant
-</h1>
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="mb-0">
+        <i class="bi bi-chat-dots-fill"></i> Pep AI
+    </h1>
+    
+    {% if not user.premium_tier and not user.platinum_tier %}
+    <!-- Free Tier Usage Counter -->
+    <div class="badge bg-warning text-dark px-3 py-2" style="font-size: 1rem;">
+        <i class="bi bi-chat-square-text"></i> 
+        <span id="questionsRemaining">{{ 8 - questions_used }}</span>/8 questions remaining
+    </div>
+    {% elif user.premium_tier %}
+    <div class="badge bg-success text-white px-3 py-2" style="font-size: 1rem;">
+        <i class="bi bi-infinity"></i> Premium - Unlimited
+    </div>
+    {% else %}
+    <div class="badge bg-primary text-white px-3 py-2" style="font-size: 1rem;">
+        <i class="bi bi-gem"></i> Platinum - Unlimited
+    </div>
+    {% endif %}
+</div>
+
+{% if not user.premium_tier and not user.platinum_tier and questions_used >= 8 %}
+<!-- Limit Reached Message -->
+<div class="alert alert-warning">
+    <h5><i class="bi bi-exclamation-triangle"></i> Free Question Limit Reached</h5>
+    <p class="mb-3">You've used all 8 free questions for this month. Upgrade to Premium or Platinum for unlimited AI questions!</p>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('upgrade', tier='premium') }}" class="btn btn-success">
+            <i class="bi bi-arrow-up-circle"></i> Upgrade to Premium - $9.99/mo
+        </a>
+        <a href="{{ url_for('upgrade', tier='platinum') }}" class="btn btn-primary">
+            <i class="bi bi-gem"></i> Upgrade to Platinum - $19.99/mo
+        </a>
+    </div>
+</div>
+{% endif %}
 
 <div class="row">
     <div class="col-lg-8">
@@ -18,9 +52,9 @@
                     <!-- Welcome message -->
                     <div class="message assistant-message mb-3">
                         <div class="bg-light p-3 rounded">
-                            <strong><i class="bi bi-robot"></i> AI Assistant:</strong>
+                            <strong><i class="bi bi-robot"></i> Pep AI:</strong>
                             <p class="mb-0 mt-2">
-                                Hi! I'm your peptide assistant. I can help you with:
+                                Hi! I'm Pep AI, your peptide assistant. I can help you with:
                             </p>
                             <ul class="mb-0 mt-2">
                                 <li>Peptide information and dosing</li>
@@ -42,12 +76,18 @@
                                id="user-input" 
                                class="form-control" 
                                placeholder="Ask about peptides, dosing, protocols..."
+                               {% if not user.premium_tier and not user.platinum_tier and questions_used >= 8 %}disabled{% endif %}
                                required
                                autocomplete="off">
-                        <button type="submit" class="btn btn-primary" id="send-btn">
+                        <button type="submit" class="btn btn-primary" id="send-btn" {% if not user.premium_tier and not user.platinum_tier and questions_used >= 8 %}disabled{% endif %}>
                             <i class="bi bi-send"></i> Send
                         </button>
                     </div>
+                    {% if not user.premium_tier and not user.platinum_tier and questions_used >= 8 %}
+                    <small class="text-muted mt-2 d-block">
+                        <i class="bi bi-lock-fill"></i> Upgrade to continue asking questions
+                    </small>
+                    {% endif %}
                 </form>
             </div>
         </div>
@@ -145,8 +185,24 @@ chatForm.addEventListener('submit', async function(e) {
         
         if (data.success) {
             addMessage(data.message, 'assistant');
+            
+            // Update question counter for free tier
+            if (data.questions_used !== undefined) {
+                const remaining = 8 - data.questions_used;
+                const counterEl = document.getElementById('questionsRemaining');
+                if (counterEl) {
+                    counterEl.textContent = remaining;
+                }
+                
+                // Disable form if limit reached
+                if (remaining <= 0) {
+                    userInput.disabled = true;
+                    sendBtn.disabled = true;
+                    addMessage('You\'ve reached the free tier limit of 8 questions. Please upgrade to Premium or Platinum for unlimited AI questions!', 'assistant');
+                }
+            }
         } else {
-            addMessage('Sorry, I encountered an error. Please try again.', 'assistant', true);
+            addMessage(data.error || 'Sorry, I encountered an error. Please try again.', 'assistant', true);
         }
     } catch (error) {
         console.error('Chat error:', error);
