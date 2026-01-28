@@ -21,102 +21,33 @@
 
     <div class="collapse navbar-collapse" id="navMain">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-        {% if has_endpoint('dashboard') %}
-          <li class="nav-item">
-            <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">
-              <i class="bi bi-speedometer2"></i> Dashboard
-            </a>
-          </li>
-        {% endif %}
-
-        {# Pep AI is a Tier1+ feature, and only shown if the endpoint exists #}
-        {% if has_endpoint('chat') %}
-          {% if current_user.is_authenticated and tier_at_least(current_user.tier, 'tier1') %}
-            <li class="nav-item">
-              <a class="nav-link {% if request.endpoint == 'chat' %}active{% endif %}" href="{{ url_for('chat') }}">
-                <i class="bi bi-chat-dots"></i> Pep AI
-              </a>
-            </li>
-          {% else %}
-            <li class="nav-item">
-              <a class="nav-link disabled" href="#" tabindex="-1" aria-disabled="true">
-                <i class="bi bi-lock"></i> Pep AI
-              </a>
-            </li>
-          {% endif %}
-        {% endif %}
-
-        {% if has_endpoint('peptide_calculator') %}
-          <li class="nav-item">
-            <a class="nav-link {% if request.endpoint in ['peptide_calculator', 'calculator'] %}active{% endif %}" href="{{ url_for('peptide_calculator') }}">
-              <i class="bi bi-calculator"></i> Peptide Calculator
-            </a>
-          </li>
-        {% endif %}
-
-        {% if has_endpoint('protocols') %}
-          <li class="nav-item">
-            <a class="nav-link {% if request.endpoint == 'protocols' %}active{% endif %}" href="{{ url_for('protocols') }}">
-              <i class="bi bi-clipboard2-check"></i> Protocols
-            </a>
-          </li>
-        {% endif %}
-
-        {% if has_endpoint('vials') %}
-          <li class="nav-item">
-            <a class="nav-link {% if request.endpoint == 'vials' %}active{% endif %}" href="{{ url_for('vials') }}">
-              <i class="bi bi-box"></i> Vials
-            </a>
-          </li>
-        {% endif %}
-
-        {% if has_endpoint('history') %}
-          <li class="nav-item">
-            <a class="nav-link {% if request.endpoint == 'history' %}active{% endif %}" href="{{ url_for('history') }}">
-              <i class="bi bi-clock-history"></i> History
-            </a>
-          </li>
-        {% endif %}
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('chat') }}"><i class="bi bi-chat-dots"></i> Pep AI</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('calculator') }}"><i class="bi bi-calculator"></i> Peptide Calculator</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('protocols') }}"><i class="bi bi-clipboard2-check"></i> Protocols</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('vials') }}"><i class="bi bi-box"></i> Vials</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('history') }}"><i class="bi bi-clock-history"></i> History</a></li>
       </ul>
 
       {% if current_user.is_authenticated %}
       <div class="dropdown">
         <a class="nav-link dropdown-toggle text-white" href="#" id="userDrop" role="button" data-bs-toggle="dropdown" aria-expanded="false">
           <i class="bi bi-person-circle"></i> {{ current_user.email }}
-          <span class="badge text-bg-light ms-1">{{ current_user.tier }}</span>
         </a>
         <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDrop">
-          {% if has_endpoint('coaching') %}
-            {% if tier_at_least(current_user.tier, 'tier1') %}
-              <li><a class="dropdown-item" href="{{ url_for('coaching') }}"><i class="bi bi-stars"></i> Coaching</a></li>
-            {% else %}
-              <li><span class="dropdown-item-text"><i class="bi bi-lock"></i> Coaching (Tier1)</span></li>
-            {% endif %}
-          {% endif %}
+          <li><a class="dropdown-item" href="{{ url_for('coaching') }}"><i class="bi bi-stars"></i> Coaching</a></li>
           <li><hr class="dropdown-divider"></li>
-          {% if has_endpoint('logout') %}<li><a class="dropdown-item" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i> Logout</a></li>{% endif %}
+          <li><a class="dropdown-item" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i> Logout</a></li>
         </ul>
       </div>
       {% else %}
-      {% if has_endpoint('login') %}<a class="btn btn-light btn-sm" href="{{ url_for('login') }}">Login</a>{% endif %}
+      <a class="btn btn-light btn-sm" href="{{ url_for('login') }}">Login</a>
       {% endif %}
     </div>
   </div>
 </nav>
 
 <main class="container-fluid py-4">
-  <!-- Flash Messages -->
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for category, message in messages %}
-        <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
-          {{ message }}
-          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-      {% endfor %}
-    {% endif %}
-  {% endwith %}
-
   {% block content %}{% endblock %}
 </main>
 
