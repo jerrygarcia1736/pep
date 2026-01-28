@@ -1,130 +1,113 @@
-/* Peptide Tracker - UI Enhancements
- * Dashboard: Age Slider + Goals toggles + Recommendations render
- * Safe to include on every page.
- */
+// Peptide Tracker - UI helpers for dashboard + compare
+// Free tier: recommendations are locked (no network calls; no red errors).
 
 (function () {
-  function qs(sel, root) { return (root || document).querySelector(sel); }
-  function qsa(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
+  const qs = (sel) => document.querySelector(sel);
 
-  // Debounce helper
-  function debounce(fn, wait) {
-    let t;
-    return function (...args) {
-      clearTimeout(t);
-      t = setTimeout(() => fn.apply(this, args), wait);
-    };
+  function showPaidOnlyRecommendations() {
+    const recoList = document.getElementById("recoList");
+    const recoStatus = document.getElementById("recoStatus");
+    const placeholder = document.getElementById("recoPlaceholder");
+    const badge = document.getElementById("recoPaidBadge");
+
+    if (badge) badge.classList.remove("d-none");
+    if (placeholder) placeholder.classList.remove("d-none");
+    if (recoList) recoList.classList.add("d-none");
+    if (recoStatus) recoStatus.classList.add("d-none");
+    if (recoStatus) recoStatus.textContent = "";
   }
 
-  // ---------------- Dashboard recommendations ----------------
-  function getSelectedGoals() {
-    const goals = qsa('.goal-toggle:checked').map(el => el.value).filter(Boolean);
-    return goals;
-  }
+  function initDashboardRecommendations() {
+    const ageSlider = document.getElementById("ageSlider");
+    const ageValue = document.getElementById("ageValue");
+    const recoList = document.getElementById("recoList");
+    const goalButtons = document.querySelectorAll(".goal-toggle");
+    const isPaid = window.PEPTIDE_RECO_PAID === true; // future toggle
 
-  function setRecoStatus(text, isError) {
-    const el = qs('#recoStatus');
-    if (!el) return;
-    el.textContent = text;
-    el.classList.toggle('text-danger', !!isError);
-  }
+    if (!ageSlider || !ageValue) return; // not on dashboard
 
-  function renderReco(items) {
-    const list = qs('#recoList');
-    const btns = qs('#recoButtons');
-    if (!list) return;
+    // Always keep the age pill in sync
+    const syncAge = () => { ageValue.textContent = String(ageSlider.value); };
+    ageSlider.addEventListener("input", syncAge);
+    syncAge();
 
-    list.innerHTML = '';
-    if (btns) btns.innerHTML = '';
-
-    if (!items || !items.length) {
-      setRecoStatus('No matches', false);
-      list.innerHTML = '<div class="text-muted small mt-2">No recommendations yet (add more peptide notes/benefits text).</div>';
+    if (!isPaid) {
+      // Free version: no API calls, no red errors.
+      showPaidOnlyRecommendations();
       return;
     }
 
-    setRecoStatus('Updated', false);
+    // Paid version (optional): fetch recommendations from backend.
+    const recoStatus = document.getElementById("recoStatus");
+    const placeholder = document.getElementById("recoPlaceholder");
+    const badge = document.getElementById("recoPaidBadge");
 
-    // List items
-    items.slice(0, 6).forEach((it) => {
-      const id = it.id;
-      const title = it.common_name ? `${it.name} (${it.common_name})` : it.name;
-      const reason = it.reason || 'Based on age/goals + peptide notes/benefits text';
-      const img = it.image_url;
+    if (badge) badge.classList.add("d-none");
+    if (placeholder) placeholder.classList.add("d-none");
+    if (recoList) recoList.classList.remove("d-none");
+    if (recoStatus) recoStatus.classList.remove("d-none");
 
-      const a = document.createElement('a');
-      a.className = 'list-group-item list-group-item-action d-flex gap-3 align-items-start reco-item';
-      a.href = `/peptides/${id}`;
+    let activeGoals = new Set();
 
-      a.innerHTML = `
-        ${img ? `<img src="${img}" loading="lazy" class="reco-thumb" alt="${it.name}">` : `<div class="reco-thumb placeholder"></div>`}
-        <div class="flex-grow-1">
-          <div class="d-flex justify-content-between align-items-start">
-            <div class="fw-semibold">${title}</div>
-            <span class="badge bg-secondary-subtle text-secondary border">${Math.round(it.score || 0)}</span>
-          </div>
-          <div class="small text-muted mt-1">${reason}</div>
-          <div class="mt-2 d-flex gap-2 flex-wrap">
-            <span class="badge text-bg-light border">${(it.category || 'General')}</span>
-            ${(it.goals_matched || []).slice(0,3).map(g => `<span class="badge text-bg-light border">${g}</span>`).join('')}
-          </div>
-        </div>
-      `;
-      list.appendChild(a);
+    const setStatus = (txt) => { if (recoStatus) recoStatus.textContent = txt || ""; };
 
-      // Quick buttons
-      if (btns) {
-        const b = document.createElement('a');
-        b.href = `/peptides/${id}`;
-        b.className = 'btn btn-sm btn-outline-primary reco-chip';
-        b.textContent = it.name;
-        btns.appendChild(b);
-      }
-    });
-  }
-
-  async function fetchRecommendations(age, goals) {
-    const params = new URLSearchParams();
-    if (age) params.set('age', String(age));
-    if (goals && goals.length) params.set('goals', goals.join(','));
-
-    setRecoStatus('Loading…', false);
-
-    const res = await fetch(`/api/recommendations?${params.toString()}`, { headers: { 'Accept': 'application/json' }});
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  }
-
-  function initDashboardReco() {
-    const slider = qs('#ageSlider');
-    const agePill = qs('#agePill');
-    const list = qs('#recoList');
-    if (!slider || !list) return; // not on dashboard
-
-    const updateAgeUI = (v) => { if (agePill) agePill.textContent = String(v); };
-
-    const load = debounce(async () => {
+    async function loadRecommendations() {
       try {
-        const age = parseInt(slider.value || '35', 10);
-        const goals = getSelectedGoals();
-        updateAgeUI(age);
-        const data = await fetchRecommendations(age, goals);
-        renderReco(data.items || []);
+        setStatus("Loading…");
+        const age = Number(ageSlider.value || 35);
+        const goals = Array.from(activeGoals).join(",");
+        const url = `/api/recommendations?age=${encodeURIComponent(age)}&goals=${encodeURIComponent(goals)}`;
+        const res = await fetch(url, { headers: { "Accept": "application/json" } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        if (!Array.isArray(data) || data.length === 0) {
+          recoList.innerHTML = `<div class="list-group-item small text-muted">No recommendations returned.</div>`;
+          setStatus("");
+          return;
+        }
+
+        recoList.innerHTML = data.map((item) => {
+          const title = (item.title || item.name || "Recommendation").toString();
+          const detail = (item.detail || item.reason || "").toString();
+          return `
+            <div class="list-group-item">
+              <div class="fw-semibold">${escapeHtml(title)}</div>
+              ${detail ? `<div class="small text-muted mt-1">${escapeHtml(detail)}</div>` : ""}
+            </div>`;
+        }).join("");
+
+        setStatus("");
       } catch (e) {
-        console.error('Reco error', e);
-        setRecoStatus('Error', true);
-        const list = qs('#recoList');
-        if (list) list.innerHTML = '<div class="text-danger small mt-2">Could not load recommendations.</div>';
+        // Never show red error. Fall back to paid-only placeholder.
+        console.warn("Recommendations failed:", e);
+        showPaidOnlyRecommendations();
       }
-    }, 250);
+    }
 
-    slider.addEventListener('input', () => { updateAgeUI(slider.value); load(); });
-    qsa('.goal-toggle').forEach(el => el.addEventListener('change', load));
+    goalButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const goal = btn.getAttribute("data-goal");
+        if (!goal) return;
+        const isActive = btn.classList.toggle("active");
+        if (isActive) activeGoals.add(goal);
+        else activeGoals.delete(goal);
+        loadRecommendations();
+      });
+    });
 
-    // Initial load
-    updateAgeUI(slider.value || 35);
-    load();
+    ageSlider.addEventListener("change", loadRecommendations);
+    loadRecommendations();
   }
 
-  document.addEventListener('DOMContentLoaded', initDashboardReco);
+  // Simple HTML escape for safe rendering
+  function escapeHtml(str) {
+    return str.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    initDashboardRecommendations();
+  });
 })();
