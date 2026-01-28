@@ -355,7 +355,7 @@ def protocols():
     return render_template('protocols.html', protocols=active_protocols)
 
 
-@app.route('/protocols/add', methods=['GET', 'POST'], endpoint='add_protocol')
+@app.route('/protocols/add', methods=['GET', 'POST'])
 @login_required
 def add_protocol():
     """Create new protocol"""
@@ -584,6 +584,124 @@ def api_vials_by_peptide(peptide_id):
     db_session.close()
     
     return jsonify(vials_data)
+
+
+
+
+# ==================== RECOMMENDATIONS API ====================
+
+@app.route('/api/recommendations')
+@login_required
+def api_recommendations():
+    """
+    Return a simple, explainable recommendation list based on:
+    - Age (heuristic buckets)
+    - Selected goals (keywords)
+    - Peptide text fields (notes/benefits/common_name/name)
+    This is a UI prioritization tool only — not medical advice.
+    """
+    age = request.args.get('age', 35, type=int)
+    goals_raw = request.args.get('goals', '', type=str)
+    goals = [g.strip().lower() for g in goals_raw.split(',') if g.strip()]
+
+    # Keyword maps (tunable)
+    goal_keywords = {
+        'fat loss': ['fat', 'weight', 'glp', 'metabolic', 'insulin', 'appetite'],
+        'recovery': ['recovery', 'injury', 'tendon', 'joint', 'healing', 'repair'],
+        'skin': ['skin', 'collagen', 'wrinkle', 'elastic', 'hair'],
+        'cognition': ['cognition', 'focus', 'memory', 'brain', 'neuro', 'mood'],
+        'longevity': ['longevity', 'mitochond', 'aging', 'senescence', 'energy', 'oxidative'],
+    }
+
+    # Age weighting (very rough)
+    age_bias = []
+    if age >= 55:
+        age_bias = ['longevity', 'recovery']
+    elif age >= 40:
+        age_bias = ['recovery', 'skin', 'longevity']
+    else:
+        age_bias = ['recovery', 'cognition']
+
+    # Combine explicit goals with bias
+    goal_order = []
+    for g in goals + age_bias:
+        if g and g not in goal_order:
+            goal_order.append(g)
+
+    db_session = get_session(db_url)
+    try:
+        # Import Peptide from models already at top
+        peptides = db_session.query(Peptide).all()
+
+        items = []
+        for p in peptides:
+            # Build searchable text
+            fields = []
+            for attr in ('name', 'common_name', 'notes', 'benefits', 'mechanism', 'category'):
+                v = getattr(p, attr, None)
+                if v:
+                    fields.append(str(v))
+            hay = " ".join(fields).lower()
+
+            score = 0.0
+            matched = []
+
+            # Base score for having any descriptive text
+            if len(hay) > 20:
+                score += 5
+
+            # Goal matches
+            for g in goal_order:
+                kw = goal_keywords.get(g, [])
+                hits = sum(1 for k in kw if k in hay)
+                if hits:
+                    score += 12 + hits * 2
+                    matched.append(g)
+
+            # Slight preference for common peptide names matching goal intent
+            pname = (getattr(p, 'name', '') or '').lower()
+            if 'retatrutide' in pname and ('fat loss' in goal_order):
+                score += 10
+            if 'bpc' in pname and ('recovery' in goal_order):
+                score += 8
+            if 'tb-500' in pname and ('recovery' in goal_order):
+                score += 6
+            if 'ghk' in pname and ('skin' in goal_order):
+                score += 8
+            if 'ss-31' in pname and ('longevity' in goal_order):
+                score += 7
+            if 'mots' in pname and ('longevity' in goal_order or 'fat loss' in goal_order):
+                score += 6
+
+            # Format image url if present
+            img_fn = getattr(p, 'image_filename', None)
+            img_url = url_for('static', filename=f'img/{img_fn}') if img_fn else None
+
+            reason = " + ".join([g.title() for g in matched[:3]]) if matched else "Based on age bucket + peptide notes/benefits text"
+
+            items.append({
+                "id": getattr(p, 'id', None),
+                "name": getattr(p, 'name', 'Unknown'),
+                "common_name": getattr(p, 'common_name', None),
+                "category": getattr(p, 'category', None) or "General",
+                "score": score,
+                "reason": reason,
+                "goals_matched": [g.title() for g in matched[:5]],
+                "image_url": img_url,
+            })
+
+        items.sort(key=lambda x: x.get("score", 0), reverse=True)
+        # Filter out rows without an id (shouldn't happen, but defensive)
+        items = [it for it in items if it.get("id") is not None][:10]
+
+        return jsonify({
+            "age": age,
+            "goals": [g.title() for g in goals],
+            "items": items,
+        })
+    finally:
+        db_session.close()
+
 
 
 # ==================== ERROR HANDLERS ====================

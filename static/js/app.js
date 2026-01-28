@@ -1,85 +1,130 @@
-// Lazy-load images + Age/Goals recommendations
+/* Peptide Tracker - UI Enhancements
+ * Dashboard: Age Slider + Goals toggles + Recommendations render
+ * Safe to include on every page.
+ */
+
 (function () {
-  // --- lazy images ---
-  const lazyImgs = document.querySelectorAll('img[data-src]');
-  if ('IntersectionObserver' in window) {
-    const io = new IntersectionObserver((entries, obs) => {
-      entries.forEach(e => {
-        if (!e.isIntersecting) return;
-        const img = e.target;
-        img.src = img.dataset.src;
-        img.removeAttribute('data-src');
-        obs.unobserve(img);
-      });
-    }, { rootMargin: '200px' });
-    lazyImgs.forEach(img => io.observe(img));
-  } else {
-    lazyImgs.forEach(img => { img.src = img.dataset.src; img.removeAttribute('data-src'); });
+  function qs(sel, root) { return (root || document).querySelector(sel); }
+  function qsa(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
+
+  // Debounce helper
+  function debounce(fn, wait) {
+    let t;
+    return function (...args) {
+      clearTimeout(t);
+      t = setTimeout(() => fn.apply(this, args), wait);
+    };
   }
 
-  // --- dashboard recommendations widget ---
-  const slider = document.getElementById('ageSlider');
-  const agePill = document.getElementById('ageValuePill');
-  const recList = document.getElementById('recommendationsList');
-  const recError = document.getElementById('recommendationsError');
-
-  function selectedGoals() {
-    const checks = document.querySelectorAll('input[name="goalToggle"]:checked');
-    return Array.from(checks).map(c => c.value).join(',');
+  // ---------------- Dashboard recommendations ----------------
+  function getSelectedGoals() {
+    const goals = qsa('.goal-toggle:checked').map(el => el.value).filter(Boolean);
+    return goals;
   }
 
-  async function loadRecs() {
-    if (!slider || !recList) return;
+  function setRecoStatus(text, isError) {
+    const el = qs('#recoStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('text-danger', !!isError);
+  }
 
-    const age = parseInt(slider.value || '35', 10);
-    if (agePill) agePill.textContent = String(age);
+  function renderReco(items) {
+    const list = qs('#recoList');
+    const btns = qs('#recoButtons');
+    if (!list) return;
 
-    recError && (recError.textContent = '');
-    recList.innerHTML = '<li class="list-group-item text-muted">Loading…</li>';
+    list.innerHTML = '';
+    if (btns) btns.innerHTML = '';
 
-    const goals = selectedGoals();
-
-    try {
-      const url = `/api/recommendations?age=${encodeURIComponent(age)}&goals=${encodeURIComponent(goals)}`;
-      const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-
-      const items = (data.items || []);
-      if (!items.length) {
-        recList.innerHTML = '<li class="list-group-item text-muted">No suggestions found yet.</li>';
-        return;
-      }
-
-      recList.innerHTML = '';
-      items.forEach(it => {
-        const li = document.createElement('li');
-        li.className = 'list-group-item d-flex justify-content-between align-items-center';
-        const name = document.createElement('a');
-        name.href = `/peptides/${it.id}`;
-        name.textContent = it.common_name ? `${it.name} (${it.common_name})` : it.name;
-
-        const score = document.createElement('span');
-        score.className = 'badge bg-secondary badge-pill';
-        score.textContent = `score ${it.score}`;
-
-        li.appendChild(name);
-        li.appendChild(score);
-        recList.appendChild(li);
-      });
-    } catch (e) {
-      recList.innerHTML = '';
-      if (recError) recError.textContent = 'Could not load recommendations.';
-      console.error(e);
+    if (!items || !items.length) {
+      setRecoStatus('No matches', false);
+      list.innerHTML = '<div class="text-muted small mt-2">No recommendations yet (add more peptide notes/benefits text).</div>';
+      return;
     }
+
+    setRecoStatus('Updated', false);
+
+    // List items
+    items.slice(0, 6).forEach((it) => {
+      const id = it.id;
+      const title = it.common_name ? `${it.name} (${it.common_name})` : it.name;
+      const reason = it.reason || 'Based on age/goals + peptide notes/benefits text';
+      const img = it.image_url;
+
+      const a = document.createElement('a');
+      a.className = 'list-group-item list-group-item-action d-flex gap-3 align-items-start reco-item';
+      a.href = `/peptides/${id}`;
+
+      a.innerHTML = `
+        ${img ? `<img src="${img}" loading="lazy" class="reco-thumb" alt="${it.name}">` : `<div class="reco-thumb placeholder"></div>`}
+        <div class="flex-grow-1">
+          <div class="d-flex justify-content-between align-items-start">
+            <div class="fw-semibold">${title}</div>
+            <span class="badge bg-secondary-subtle text-secondary border">${Math.round(it.score || 0)}</span>
+          </div>
+          <div class="small text-muted mt-1">${reason}</div>
+          <div class="mt-2 d-flex gap-2 flex-wrap">
+            <span class="badge text-bg-light border">${(it.category || 'General')}</span>
+            ${(it.goals_matched || []).slice(0,3).map(g => `<span class="badge text-bg-light border">${g}</span>`).join('')}
+          </div>
+        </div>
+      `;
+      list.appendChild(a);
+
+      // Quick buttons
+      if (btns) {
+        const b = document.createElement('a');
+        b.href = `/peptides/${id}`;
+        b.className = 'btn btn-sm btn-outline-primary reco-chip';
+        b.textContent = it.name;
+        btns.appendChild(b);
+      }
+    });
   }
 
-  if (slider) {
-    slider.addEventListener('input', loadRecs);
-  }
-  const goalToggles = document.querySelectorAll('input[name="goalToggle"]');
-  goalToggles.forEach(t => t.addEventListener('change', loadRecs));
+  async function fetchRecommendations(age, goals) {
+    const params = new URLSearchParams();
+    if (age) params.set('age', String(age));
+    if (goals && goals.length) params.set('goals', goals.join(','));
 
-  // kick off
-  loadRecs();
+    setRecoStatus('Loading…', false);
+
+    const res = await fetch(`/api/recommendations?${params.toString()}`, { headers: { 'Accept': 'application/json' }});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  }
+
+  function initDashboardReco() {
+    const slider = qs('#ageSlider');
+    const agePill = qs('#agePill');
+    const list = qs('#recoList');
+    if (!slider || !list) return; // not on dashboard
+
+    const updateAgeUI = (v) => { if (agePill) agePill.textContent = String(v); };
+
+    const load = debounce(async () => {
+      try {
+        const age = parseInt(slider.value || '35', 10);
+        const goals = getSelectedGoals();
+        updateAgeUI(age);
+        const data = await fetchRecommendations(age, goals);
+        renderReco(data.items || []);
+      } catch (e) {
+        console.error('Reco error', e);
+        setRecoStatus('Error', true);
+        const list = qs('#recoList');
+        if (list) list.innerHTML = '<div class="text-danger small mt-2">Could not load recommendations.</div>';
+      }
+    }, 250);
+
+    slider.addEventListener('input', () => { updateAgeUI(slider.value); load(); });
+    qsa('.goal-toggle').forEach(el => el.addEventListener('change', load));
+
+    // Initial load
+    updateAgeUI(slider.value || 35);
+    load();
+  }
+
+  document.addEventListener('DOMContentLoaded', initDashboardReco);
 })();

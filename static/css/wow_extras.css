@@ -1,0 +1,7 @@
+
+/* --- WOW cards / hover / recommendation visuals --- */
+.reco-item { transition: transform .12s ease, box-shadow .12s ease; border-radius: 12px; }
+.reco-item:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
+.reco-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 10px; border: 1px solid rgba(0,0,0,.08); background: #fff; }
+.reco-thumb.placeholder { width: 44px; height: 44px; border-radius: 10px; border: 1px dashed rgba(0,0,0,.18); background: rgba(0,0,0,.02); }
+.reco-chip { border-radius: 999px; }
