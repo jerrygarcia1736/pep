@@ -1,14 +1,18 @@
 """
 Peptide Tracker Web Application
-Flask web interface with user authentication
+Flask web interface with user authentication, Stripe subscriptions, and email reminders
 """
 
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from flask_mail import Mail, Message
 from functools import wraps
 from datetime import datetime, timedelta
 import os
+import json
 from werkzeug.security import generate_password_hash, check_password_hash
 import openai
+import stripe
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from models import get_session, Base, create_engine
 from database import PeptideDB
@@ -16,7 +20,7 @@ from calculator import PeptideCalculator
 from config import Config
 
 # Import models for user management
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from models import Base as ModelBase
 
@@ -29,6 +33,17 @@ class User(ModelBase):
     email = Column(String(120), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Subscription tiers
+    premium_tier = Column(Boolean, default=False)
+    platinum_tier = Column(Boolean, default=False)
+    
+    # Stripe info
+    stripe_customer_id = Column(String(255))
+    stripe_subscription_id = Column(String(255))
+    
+    # Email reminders
+    email_reminders_enabled = Column(Boolean, default=True)
     
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -43,6 +58,22 @@ class User(ModelBase):
 # Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+
+# Stripe configuration
+stripe.api_key = os.environ.get('STRIPE_SECRET_KEY')
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY')
+PREMIUM_PRICE_ID = os.environ.get('STRIPE_PREMIUM_PRICE_ID', 'price_premium')
+PLATINUM_PRICE_ID = os.environ.get('STRIPE_PLATINUM_PRICE_ID', 'price_platinum')
+
+# Email configuration
+app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
+app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
+app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER', 'noreply@peptidetracker.com')
+
+mail = Mail(app)
 
 # OpenAI setup
 openai.api_key = Config.OPENAI_API_KEY
@@ -78,6 +109,135 @@ try:
     init_database()
 except Exception as e:
     print(f"Warning: Could not initialize database: {e}")
+
+
+# Email reminder functions
+def send_dose_reminder_email(user_email, peptide_name, dose_mcg, protocol_name):
+    """Send email reminder for peptide dose"""
+    try:
+        msg = Message(
+            subject=f'💉 Time for your {peptide_name}',
+            recipients=[user_email],
+            html=f'''
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #4F46E5;">💉 Peptide Reminder</h2>
+                <p>It's time for your next dose!</p>
+                
+                <div style="background: #F3F4F6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                    <p style="margin: 5px 0;"><strong>Peptide:</strong> {peptide_name}</p>
+                    <p style="margin: 5px 0;"><strong>Dose:</strong> {dose_mcg} mcg</p>
+                    <p style="margin: 5px 0;"><strong>Protocol:</strong> {protocol_name}</p>
+                </div>
+                
+                <a href="https://peptide-tracker-c3nu.onrender.com/log-injection" 
+                   style="display: inline-block; background: #4F46E5; color: white; padding: 12px 24px; 
+                          text-decoration: none; border-radius: 6px; margin: 20px 0;">
+                    Log Your Injection
+                </a>
+                
+                <hr style="border: none; border-top: 1px solid #E5E7EB; margin: 30px 0;">
+                
+                <p style="color: #6B7280; font-size: 12px;">
+                    Peptide Tracker - Track your peptide journey<br>
+                    <a href="https://peptide-tracker-c3nu.onrender.com/settings" style="color: #4F46E5;">
+                        Manage reminder settings
+                    </a>
+                </p>
+            </div>
+            '''
+        )
+        mail.send(msg)
+        print(f"✓ Email reminder sent to {user_email} for {peptide_name}")
+        return True
+    except Exception as e:
+        print(f"✗ Email error: {e}")
+        return False
+
+
+def check_and_send_reminders():
+    """Check protocols and send email reminders"""
+    print("🔔 Checking for dose reminders...")
+    
+    try:
+        db_session = get_session(db_url)
+        
+        # Import Injection model
+        from models import Protocol, Injection
+        
+        # Get all active protocols
+        protocols = db_session.query(Protocol).filter(
+            Protocol.start_date <= datetime.utcnow()
+        ).filter(
+            (Protocol.end_date == None) | (Protocol.end_date >= datetime.utcnow())
+        ).all()
+        
+        reminders_sent = 0
+        
+        for protocol in protocols:
+            # Get user
+            user = db_session.query(User).filter_by(id=protocol.user_id).first()
+            if not user or not user.email or not user.email_reminders_enabled:
+                continue
+            
+            # Get last injection for this protocol
+            last_injection = db_session.query(Injection).filter_by(
+                protocol_id=protocol.id
+            ).order_by(Injection.timestamp.desc()).first()
+            
+            # Calculate when next dose is due
+            hours_between_doses = 24 / protocol.frequency_per_day
+            
+            if last_injection:
+                next_dose_time = last_injection.timestamp + timedelta(hours=hours_between_doses)
+            else:
+                # No injections yet, send reminder if protocol just started
+                next_dose_time = protocol.start_date
+            
+            # If next dose is within 30 minutes (past or future), send reminder
+            now = datetime.utcnow()
+            time_until_next = (next_dose_time - now).total_seconds() / 60  # minutes
+            
+            # Send if dose is due within 30 minutes
+            if -15 <= time_until_next <= 30:
+                # Check if we already sent a reminder recently (within last hour)
+                if last_injection:
+                    time_since_last = (now - last_injection.timestamp).total_seconds() / 3600
+                    if time_since_last < (hours_between_doses - 1):
+                        continue  # Too soon, skip
+                
+                # Send reminder
+                success = send_dose_reminder_email(
+                    user.email,
+                    protocol.peptide.name,
+                    protocol.dose_mcg,
+                    protocol.name
+                )
+                
+                if success:
+                    reminders_sent += 1
+        
+        db_session.close()
+        print(f"✓ Sent {reminders_sent} reminders")
+        
+    except Exception as e:
+        print(f"✗ Reminder check error: {e}")
+
+
+# Start background scheduler for email reminders
+scheduler = BackgroundScheduler()
+scheduler.add_job(
+    func=check_and_send_reminders,
+    trigger="interval",
+    minutes=30,  # Check every 30 minutes
+    id='dose_reminders',
+    name='Check and send dose reminders',
+    replace_existing=True
+)
+
+# Only start scheduler if not in debug mode (prevents double execution during dev)
+if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    scheduler.start()
+    print("✓ Email reminder scheduler started (checking every 30 minutes)")
 
 
 # Login decorator
@@ -172,6 +332,9 @@ def login():
         if user and user.check_password(password):
             session['user_id'] = user.id
             session['username'] = user.username
+            session['email'] = user.email
+            session['premium_tier'] = user.premium_tier
+            session['platinum_tier'] = user.platinum_tier
             flash(f'Welcome back, {user.username}!', 'success')
             db_session.close()
             return redirect(url_for('dashboard'))
@@ -539,13 +702,165 @@ def chat():
 @login_required
 def bodybuilding():
     """Bodybuilding peptide protocols - Platinum feature"""
-    # Create a simple user object for the template
-    # In the future, this will come from the real database with tier info
-    class TempUser:
-        platinum_tier = False  # Change to True to see full content
-        premium_tier = False
+    db_session = get_session(db_url)
+    user = db_session.query(User).filter_by(id=session['user_id']).first()
+    db_session.close()
     
-    return render_template('bodybuilding.html', user=TempUser())
+    return render_template('bodybuilding.html', user=user)
+
+
+@app.route('/upgrade')
+@login_required
+def upgrade():
+    """Upgrade page showing tier options"""
+    tier = request.args.get('tier', 'premium')
+    canceled = request.args.get('canceled', False)
+    
+    return render_template('upgrade.html', 
+                         tier=tier,
+                         canceled=canceled,
+                         stripe_publishable_key=STRIPE_PUBLISHABLE_KEY)
+
+
+@app.route('/create-checkout-session', methods=['POST'])
+@login_required
+def create_checkout_session():
+    """Create Stripe Checkout session"""
+    try:
+        data = request.get_json()
+        tier = data.get('tier', 'premium')
+        
+        # Choose price based on tier
+        price_id = PLATINUM_PRICE_ID if tier == 'platinum' else PREMIUM_PRICE_ID
+        
+        # Get user email
+        db_session = get_session(db_url)
+        user = db_session.query(User).filter_by(id=session['user_id']).first()
+        db_session.close()
+        
+        # Create checkout session
+        checkout_session = stripe.checkout.Session.create(
+            customer_email=user.email,
+            payment_method_types=['card'],
+            line_items=[{
+                'price': price_id,
+                'quantity': 1,
+            }],
+            mode='subscription',
+            success_url=url_for('upgrade_success', _external=True) + '?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url=url_for('upgrade', _external=True) + '?canceled=true',
+            metadata={
+                'user_id': str(session['user_id']),
+                'tier': tier
+            }
+        )
+        
+        return jsonify({'checkout_url': checkout_session.url})
+        
+    except Exception as e:
+        print(f"Stripe error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/upgrade/success')
+@login_required
+def upgrade_success():
+    """Handle successful subscription"""
+    session_id = request.args.get('session_id')
+    
+    if not session_id:
+        flash('Invalid session', 'error')
+        return redirect(url_for('dashboard'))
+    
+    try:
+        # Retrieve the session to verify payment
+        checkout_session = stripe.checkout.Session.retrieve(session_id)
+        
+        # Update user's tier in database
+        db_session = get_session(db_url)
+        user = db_session.query(User).filter_by(id=session['user_id']).first()
+        
+        tier = checkout_session.metadata.get('tier')
+        if tier == 'platinum':
+            user.platinum_tier = True
+            user.premium_tier = True  # Platinum includes Premium
+            flash_message = 'Successfully upgraded to Platinum! 💎'
+        else:
+            user.premium_tier = True
+            flash_message = 'Successfully upgraded to Premium! ⭐'
+        
+        user.stripe_customer_id = checkout_session.customer
+        user.stripe_subscription_id = checkout_session.subscription
+        
+        # Update session
+        session['premium_tier'] = user.premium_tier
+        session['platinum_tier'] = user.platinum_tier
+        
+        db_session.commit()
+        db_session.close()
+        
+        flash(flash_message, 'success')
+        return redirect(url_for('dashboard'))
+        
+    except Exception as e:
+        print(f"Upgrade error: {e}")
+        flash('Error processing upgrade. Please contact support.', 'error')
+        return redirect(url_for('dashboard'))
+
+
+@app.route('/settings', methods=['GET', 'POST'])
+@login_required
+def settings():
+    """User settings page"""
+    db_session = get_session(db_url)
+    user = db_session.query(User).filter_by(id=session['user_id']).first()
+    
+    if request.method == 'POST':
+        # Update email reminders setting
+        email_reminders = request.form.get('email_reminders') == 'on'
+        user.email_reminders_enabled = email_reminders
+        
+        db_session.commit()
+        flash('Settings updated successfully!', 'success')
+    
+    db_session.close()
+    
+    return render_template('settings.html', user=user)
+
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle Stripe webhooks"""
+    payload = request.get_data()
+    sig_header = request.headers.get('Stripe-Signature')
+    webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
+    
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, webhook_secret
+        )
+    except ValueError as e:
+        return 'Invalid payload', 400
+    except stripe.error.SignatureVerificationError as e:
+        return 'Invalid signature', 400
+    
+    # Handle different event types
+    if event['type'] == 'customer.subscription.deleted':
+        # Subscription canceled
+        subscription = event['data']['object']
+        user_id = subscription['metadata'].get('user_id')
+        
+        if user_id:
+            db_session = get_session(db_url)
+            user = db_session.query(User).get(int(user_id))
+            if user:
+                user.premium_tier = False
+                user.platinum_tier = False
+                db_session.commit()
+                print(f"Downgraded user {user_id} due to subscription cancellation")
+            db_session.close()
+    
+    return jsonify({'status': 'success'}), 200
 
 
 @app.route('/api/chat', methods=['POST'])

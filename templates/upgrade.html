@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block title %}Upgrade - Peptide Tracker{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <h1 class="text-center mb-2">Choose Your Plan</h1>
+    <p class="text-center text-muted mb-5">Unlock premium features and take your peptide tracking to the next level</p>
+    
+    {% if canceled %}
+    <div class="alert alert-info text-center">
+        <i class="bi bi-info-circle"></i> Checkout canceled. No charges were made.
+    </div>
+    {% endif %}
+    
+    <div class="row justify-content-center">
+        <!-- Premium Tier -->
+        <div class="col-md-5 mb-4">
+            <div class="card shadow-lg h-100 {% if tier == 'premium' %}border-success border-3{% endif %}">
+                <div class="card-header bg-success text-white text-center py-4">
+                    <h3 class="mb-0">⭐ Premium</h3>
+                    <h2 class="display-4 my-3">$9.99<small class="fs-6">/month</small></h2>
+                </div>
+                <div class="card-body p-4 d-flex flex-column">
+                    <ul class="list-unstyled mb-4 flex-grow-1">
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-success"></i> <strong>Unlimited Pep AI questions</strong></li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-success"></i> All peptides database access</li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-success"></i> Compare peptides feature</li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-success"></i> Advanced peptide calculator</li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-success"></i> Age-based recommendations</li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-success"></i> Email dose reminders</li>
+                        <li class="mb-3"><i class="bi bi-x-circle text-muted"></i> Bodybuilding protocols</li>
+                    </ul>
+                    <button class="btn btn-success btn-lg w-100" onclick="checkout('premium')">
+                        <i class="bi bi-credit-card"></i> Subscribe to Premium
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Platinum Tier -->
+        <div class="col-md-5 mb-4">
+            <div class="card shadow-lg h-100 {% if tier == 'platinum' %}border-primary border-3{% endif %} position-relative">
+                <div class="badge bg-warning text-dark position-absolute top-0 start-50 translate-middle px-3 py-2" style="z-index: 10;">
+                    <i class="bi bi-star-fill"></i> MOST POPULAR
+                </div>
+                <div class="card-header bg-primary text-white text-center py-4">
+                    <h3 class="mb-0">💎 Platinum</h3>
+                    <h2 class="display-4 my-3">$19.99<small class="fs-6">/month</small></h2>
+                </div>
+                <div class="card-body p-4 d-flex flex-column">
+                    <ul class="list-unstyled mb-4 flex-grow-1">
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-primary"></i> <strong>Everything in Premium</strong></li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-primary"></i> <strong>🏋️ Bodybuilding protocols</strong></li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-primary"></i> Training phase stacks</li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-primary"></i> Contest prep timelines</li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-primary"></i> Advanced stacking calculator</li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-primary"></i> Blood work guidelines</li>
+                        <li class="mb-3"><i class="bi bi-check-circle-fill text-primary"></i> Side effect management</li>
+                    </ul>
+                    <button class="btn btn-primary btn-lg w-100" onclick="checkout('platinum')">
+                        <i class="bi bi-gem"></i> Subscribe to Platinum
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="text-center mt-4">
+        <p class="text-muted">
+            <i class="bi bi-shield-check"></i> Secure payment powered by Stripe • Cancel anytime • 30-day money back guarantee
+        </p>
+    </div>
+    
+    <!-- Feature Comparison -->
+    <div class="card mt-5">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Feature Comparison</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th class="text-center">Free</th>
+                            <th class="text-center">Premium</th>
+                            <th class="text-center">Platinum</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Pep AI Questions</td>
+                            <td class="text-center">8/month</td>
+                            <td class="text-center"><i class="bi bi-infinity text-success"></i></td>
+                            <td class="text-center"><i class="bi bi-infinity text-primary"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Email Reminders</td>
+                            <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                            <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                            <td class="text-center"><i class="bi bi-check-circle text-primary"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Compare Peptides</td>
+                            <td class="text-center"><i class="bi bi-x-circle text-muted"></i></td>
+                            <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                            <td class="text-center"><i class="bi bi-check-circle text-primary"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Age-Based Recommendations</td>
+                            <td class="text-center"><i class="bi bi-x-circle text-muted"></i></td>
+                            <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                            <td class="text-center"><i class="bi bi-check-circle text-primary"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Bodybuilding Protocols</td>
+                            <td class="text-center"><i class="bi bi-x-circle text-muted"></i></td>
+                            <td class="text-center"><i class="bi bi-x-circle text-muted"></i></td>
+                            <td class="text-center"><i class="bi bi-check-circle text-primary"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Advanced Stacking</td>
+                            <td class="text-center"><i class="bi bi-x-circle text-muted"></i></td>
+                            <td class="text-center"><i class="bi bi-x-circle text-muted"></i></td>
+                            <td class="text-center"><i class="bi bi-check-circle text-primary"></i></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+async function checkout(tier) {
+    const button = event.target;
+    const originalText = button.innerHTML;
+    
+    // Disable button and show loading
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
+    
+    try {
+        const response = await fetch('/create-checkout-session', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ tier: tier })
+        });
+        
+        const data = await response.json();
+        
+        if (data.checkout_url) {
+            // Redirect to Stripe Checkout
+            window.location.href = data.checkout_url;
+        } else {
+            alert('Error creating checkout session: ' + (data.error || 'Unknown error'));
+            button.disabled = false;
+            button.innerHTML = originalText;
+        }
+    } catch (error) {
+        console.error('Checkout error:', error);
+        alert('Error processing checkout. Please try again.');
+        button.disabled = false;
+        button.innerHTML = originalText;
+    }
+}
+</script>
+{% endblock %}

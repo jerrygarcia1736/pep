@@ -1,23 +1,22 @@
-# Core dependencies
-flask>=3.0.0
-flask-session>=0.6.0
+# Flask and extensions
+Flask>=3.0.0
+Flask-Mail>=0.9.1
+
+# Database
+SQLAlchemy>=2.0.0
+psycopg2-binary>=2.9.9
+
+# AI
 openai>=1.0.0
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.0  # PostgreSQL driver
-python-dotenv>=1.0.0    # For environment variables
 
-# Optional but recommended
-alembic>=1.12.0         # Database migrations
-click>=8.1.0            # CLI creation
+# Payments
+stripe>=6.0.0
 
-# Future AI/ML dependencies (commented out for now)
-# openai>=1.0.0         # For OpenAI API
-# anthropic>=0.8.0      # For Claude API
-# pgvector>=0.2.0       # For vector embeddings in Postgres
-# langchain>=0.1.0      # For RAG implementation
-# sentence-transformers>=2.2.0  # For local embeddings
+# Background jobs
+APScheduler>=3.10.4
 
-# Development dependencies
-pytest>=7.4.0           # Testing
-ipython>=8.12.0         # Better REPL
-gunicorn
+# Security
+Werkzeug>=3.0.0
+
+# Server
+gunicorn>=21.2.0

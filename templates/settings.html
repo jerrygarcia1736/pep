@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Peptide Tracker{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h1 class="mb-4"><i class="bi bi-gear"></i> Settings</h1>
+    
+    <div class="row">
+        <div class="col-md-8">
+            <!-- Account Information -->
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="bi bi-person-circle"></i> Account Information</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-sm-4 fw-bold">Username:</div>
+                        <div class="col-sm-8">{{ user.username }}</div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-sm-4 fw-bold">Email:</div>
+                        <div class="col-sm-8">{{ user.email }}</div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-sm-4 fw-bold">Member Since:</div>
+                        <div class="col-sm-8">{{ user.created_at.strftime('%B %d, %Y') }}</div>
+                    </div>
+                    <div class="row">
+                        <div class="col-sm-4 fw-bold">Plan:</div>
+                        <div class="col-sm-8">
+                            {% if user.platinum_tier %}
+                            <span class="badge bg-primary px-3 py-2">
+                                <i class="bi bi-gem"></i> Platinum
+                            </span>
+                            {% elif user.premium_tier %}
+                            <span class="badge bg-success px-3 py-2">
+                                <i class="bi bi-star-fill"></i> Premium
+                            </span>
+                            {% else %}
+                            <span class="badge bg-secondary px-3 py-2">Free</span>
+                            <a href="{{ url_for('upgrade') }}" class="btn btn-sm btn-primary ms-2">
+                                <i class="bi bi-arrow-up-circle"></i> Upgrade
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Notification Settings -->
+            <div class="card mb-4">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0"><i class="bi bi-bell"></i> Notification Settings</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('settings') }}">
+                        <div class="form-check form-switch mb-3">
+                            <input class="form-check-input" type="checkbox" id="emailReminders" 
+                                   name="email_reminders" {% if user.email_reminders_enabled %}checked{% endif %}>
+                            <label class="form-check-label" for="emailReminders">
+                                <strong>Email Reminders</strong>
+                                <div class="text-muted small">Receive email reminders when it's time for your next dose</div>
+                            </label>
+                        </div>
+                        
+                        {% if user.email_reminders_enabled %}
+                        <div class="alert alert-success">
+                            <i class="bi bi-check-circle"></i> Email reminders enabled for: <strong>{{ user.email }}</strong>
+                        </div>
+                        {% else %}
+                        <div class="alert alert-warning">
+                            <i class="bi bi-exclamation-triangle"></i> Email reminders are currently disabled
+                        </div>
+                        {% endif %}
+                        
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-circle"></i> Save Settings
+                        </button>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Subscription Management -->
+            {% if user.premium_tier or user.platinum_tier %}
+            <div class="card mb-4">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0"><i class="bi bi-credit-card"></i> Subscription</h5>
+                </div>
+                <div class="card-body">
+                    <p>
+                        You're currently subscribed to 
+                        {% if user.platinum_tier %}
+                        <strong>Platinum</strong>
+                        {% else %}
+                        <strong>Premium</strong>
+                        {% endif %}
+                    </p>
+                    
+                    <a href="https://billing.stripe.com/p/login/test_..." class="btn btn-outline-primary" target="_blank">
+                        <i class="bi bi-credit-card"></i> Manage Subscription
+                    </a>
+                    
+                    <div class="text-muted small mt-3">
+                        <i class="bi bi-info-circle"></i> You can cancel or update your subscription anytime through the Stripe customer portal
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Sidebar -->
+        <div class="col-md-4">
+            <!-- Quick Stats -->
+            <div class="card mb-4 bg-light">
+                <div class="card-body">
+                    <h6 class="mb-3"><i class="bi bi-graph-up"></i> Your Stats</h6>
+                    <div class="mb-2">
+                        <i class="bi bi-calendar-check text-primary"></i> 
+                        Active Protocols: <strong>{{ user.protocols|length if user.protocols else 0 }}</strong>
+                    </div>
+                    <div class="mb-2">
+                        <i class="bi bi-chat-dots text-success"></i> 
+                        Pep AI: 
+                        {% if user.platinum_tier or user.premium_tier %}
+                        <strong>Unlimited</strong>
+                        {% else %}
+                        <strong>8/month</strong>
+                        {% endif %}
+                    </div>
+                    <div class="mb-2">
+                        <i class="bi bi-bell text-info"></i> 
+                        Reminders: <strong>{% if user.email_reminders_enabled %}On{% else %}Off{% endif %}</strong>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Upgrade CTA -->
+            {% if not user.platinum_tier %}
+            <div class="card border-primary">
+                <div class="card-body text-center">
+                    <h5 class="mb-3">
+                        {% if user.premium_tier %}
+                        <i class="bi bi-gem"></i> Upgrade to Platinum
+                        {% else %}
+                        <i class="bi bi-star-fill"></i> Upgrade Your Plan
+                        {% endif %}
+                    </h5>
+                    <p class="small text-muted">
+                        {% if user.premium_tier %}
+                        Get access to advanced bodybuilding protocols, stacking guides, and more!
+                        {% else %}
+                        Unlock unlimited AI questions, advanced features, and email reminders!
+                        {% endif %}
+                    </p>
+                    <a href="{{ url_for('upgrade') }}" class="btn btn-primary w-100">
+                        View Plans
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
