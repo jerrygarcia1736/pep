@@ -1,0 +1,498 @@
+"""
+Peptide Tracker Web Application
+Flask web interface with user authentication
+"""
+
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from functools import wraps
+from datetime import datetime, timedelta
+import os
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from models import get_session, Base, create_engine
+from database import PeptideDB
+from calculator import PeptideCalculator
+from config import Config
+
+# Import models for user management
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from models import Base as ModelBase
+
+# User model
+class User(ModelBase):
+    __tablename__ = 'users'
+    
+    id = Column(Integer, primary_key=True)
+    username = Column(String(80), unique=True, nullable=False)
+    email = Column(String(120), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+    
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+    
+    def __repr__(self):
+        return f'<User {self.username}>'
+
+
+# Initialize Flask app
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['SQLALCHEMY_DATABASE_URI'] = Config.get_database_url(use_sqlite=True)
+
+# Database setup
+db_url = Config.get_database_url(use_sqlite=True)
+engine = create_engine(db_url)
+ModelBase.metadata.create_all(engine)
+
+
+# Login decorator
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            flash('Please log in to access this page.', 'warning')
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+# Helper function to get current user
+def get_current_user():
+    if 'user_id' in session:
+        db_session = get_session(db_url)
+        user = db_session.query(User).filter_by(id=session['user_id']).first()
+        db_session.close()
+        return user
+    return None
+
+
+# ==================== AUTHENTICATION ROUTES ====================
+
+@app.route('/')
+def index():
+    """Landing page"""
+    if 'user_id' in session:
+        return redirect(url_for('dashboard'))
+    return render_template('index.html')
+
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    """User registration"""
+    if request.method == 'POST':
+        username = request.form.get('username')
+        email = request.form.get('email')
+        password = request.form.get('password')
+        confirm_password = request.form.get('confirm_password')
+        
+        # Validation
+        if not username or not email or not password:
+            flash('All fields are required.', 'danger')
+            return redirect(url_for('register'))
+        
+        if password != confirm_password:
+            flash('Passwords do not match.', 'danger')
+            return redirect(url_for('register'))
+        
+        if len(password) < 6:
+            flash('Password must be at least 6 characters.', 'danger')
+            return redirect(url_for('register'))
+        
+        # Create user
+        db_session = get_session(db_url)
+        
+        # Check if user exists
+        existing_user = db_session.query(User).filter(
+            (User.username == username) | (User.email == email)
+        ).first()
+        
+        if existing_user:
+            flash('Username or email already exists.', 'danger')
+            db_session.close()
+            return redirect(url_for('register'))
+        
+        # Create new user
+        user = User(username=username, email=email)
+        user.set_password(password)
+        db_session.add(user)
+        db_session.commit()
+        
+        flash('Registration successful! Please log in.', 'success')
+        db_session.close()
+        return redirect(url_for('login'))
+    
+    return render_template('register.html')
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """User login"""
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        db_session = get_session(db_url)
+        user = db_session.query(User).filter_by(username=username).first()
+        
+        if user and user.check_password(password):
+            session['user_id'] = user.id
+            session['username'] = user.username
+            flash(f'Welcome back, {user.username}!', 'success')
+            db_session.close()
+            return redirect(url_for('dashboard'))
+        
+        flash('Invalid username or password.', 'danger')
+        db_session.close()
+    
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    """User logout"""
+    session.clear()
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('index'))
+
+
+# ==================== MAIN APPLICATION ROUTES ====================
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    """Main dashboard"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    # Get stats
+    active_protocols = db.list_active_protocols()
+    recent_injections = db.get_recent_injections(days=7)
+    active_vials = db.list_active_vials()
+    
+    stats = {
+        'active_protocols': len(active_protocols),
+        'active_vials': len(active_vials),
+        'injections_this_week': len(recent_injections),
+        'total_peptides': len(db.list_peptides())
+    }
+    
+    db_session.close()
+    
+    return render_template('dashboard.html', 
+                         stats=stats, 
+                         protocols=active_protocols,
+                         recent_injections=recent_injections[:5])
+
+
+@app.route('/peptides')
+@login_required
+def peptides():
+    """List all peptides"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    all_peptides = db.list_peptides()
+    db_session.close()
+    
+    return render_template('peptides.html', peptides=all_peptides)
+
+
+@app.route('/peptides/<int:peptide_id>')
+@login_required
+def peptide_detail(peptide_id):
+    """View peptide details"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    peptide = db.get_peptide(peptide_id)
+    if not peptide:
+        flash('Peptide not found.', 'danger')
+        return redirect(url_for('peptides'))
+    
+    research = db.get_peptide_research(peptide_id)
+    
+    db_session.close()
+    return render_template('peptide_detail.html', peptide=peptide, research=research)
+
+
+@app.route('/calculator', methods=['GET', 'POST'])
+@login_required
+def calculator():
+    """Reconstitution calculator"""
+    result = None
+    
+    if request.method == 'POST':
+        try:
+            peptide_name = request.form.get('peptide_name')
+            mg_amount = float(request.form.get('mg_amount'))
+            ml_water = float(request.form.get('ml_water'))
+            dose_mcg = float(request.form.get('dose_mcg'))
+            doses_per_day = int(request.form.get('doses_per_day'))
+            
+            result = PeptideCalculator.full_reconstitution_report(
+                peptide_name, mg_amount, ml_water, dose_mcg, doses_per_day
+            )
+        except (ValueError, TypeError) as e:
+            flash(f'Invalid input: {e}', 'danger')
+    
+    # Get peptide list for dropdown
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    peptides = db.list_peptides()
+    db_session.close()
+    
+    return render_template('calculator.html', result=result, peptides=peptides)
+
+
+@app.route('/vials')
+@login_required
+def vials():
+    """List vials"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    active_vials = db.list_active_vials()
+    db_session.close()
+    
+    return render_template('vials.html', vials=active_vials)
+
+
+@app.route('/vials/add', methods=['GET', 'POST'])
+@login_required
+def add_vial():
+    """Add new vial"""
+    if request.method == 'POST':
+        try:
+            peptide_id = int(request.form.get('peptide_id'))
+            mg_amount = float(request.form.get('mg_amount'))
+            vendor = request.form.get('vendor') or None
+            lot_number = request.form.get('lot_number') or None
+            
+            reconstitute = request.form.get('reconstitute') == 'yes'
+            
+            db_session = get_session(db_url)
+            db = PeptideDB(db_session)
+            
+            if reconstitute:
+                ml_water = float(request.form.get('ml_water'))
+                vial = db.add_vial(
+                    peptide_id=peptide_id,
+                    mg_amount=mg_amount,
+                    bacteriostatic_water_ml=ml_water,
+                    reconstitution_date=datetime.now(),
+                    vendor=vendor,
+                    lot_number=lot_number
+                )
+            else:
+                vial = db.add_vial(
+                    peptide_id=peptide_id,
+                    mg_amount=mg_amount,
+                    vendor=vendor,
+                    lot_number=lot_number
+                )
+            
+            db_session.close()
+            flash(f'Vial added successfully! (Concentration: {vial.concentration_mcg_per_ml} mcg/ml)', 'success')
+            return redirect(url_for('vials'))
+            
+        except (ValueError, TypeError) as e:
+            flash(f'Error adding vial: {e}', 'danger')
+    
+    # Get peptides for dropdown
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    peptides = db.list_peptides()
+    db_session.close()
+    
+    return render_template('add_vial.html', peptides=peptides)
+
+
+@app.route('/protocols')
+@login_required
+def protocols():
+    """List protocols"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    active_protocols = db.list_active_protocols()
+    db_session.close()
+    
+    return render_template('protocols.html', protocols=active_protocols)
+
+
+@app.route('/protocols/add', methods=['GET', 'POST'])
+@login_required
+def add_protocol():
+    """Create new protocol"""
+    if request.method == 'POST':
+        try:
+            peptide_id = int(request.form.get('peptide_id'))
+            name = request.form.get('name')
+            dose_mcg = float(request.form.get('dose_mcg'))
+            frequency = int(request.form.get('frequency_per_day'))
+            duration = int(request.form.get('duration_days'))
+            goals = request.form.get('goals') or None
+            
+            db_session = get_session(db_url)
+            db = PeptideDB(db_session)
+            
+            protocol = db.create_protocol(
+                peptide_id=peptide_id,
+                name=name,
+                dose_mcg=dose_mcg,
+                frequency_per_day=frequency,
+                duration_days=duration,
+                goals=goals,
+                start_date=datetime.now()
+            )
+            
+            db_session.close()
+            flash(f'Protocol "{name}" created successfully!', 'success')
+            return redirect(url_for('protocols'))
+            
+        except (ValueError, TypeError) as e:
+            flash(f'Error creating protocol: {e}', 'danger')
+    
+    # Get peptides for dropdown
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    peptides = db.list_peptides()
+    db_session.close()
+    
+    return render_template('add_protocol.html', peptides=peptides)
+
+
+@app.route('/protocols/<int:protocol_id>')
+@login_required
+def protocol_detail(protocol_id):
+    """View protocol details and history"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    protocol = db.get_protocol(protocol_id)
+    if not protocol:
+        flash('Protocol not found.', 'danger')
+        return redirect(url_for('protocols'))
+    
+    injections = db.get_protocol_injections(protocol_id, limit=50)
+    
+    db_session.close()
+    return render_template('protocol_detail.html', protocol=protocol, injections=injections)
+
+
+@app.route('/injections/log', methods=['GET', 'POST'])
+@login_required
+def log_injection():
+    """Log an injection"""
+    if request.method == 'POST':
+        try:
+            protocol_id = int(request.form.get('protocol_id'))
+            vial_id = int(request.form.get('vial_id'))
+            dose_mcg = float(request.form.get('dose_mcg'))
+            volume_ml = float(request.form.get('volume_ml'))
+            site = request.form.get('injection_site') or None
+            notes = request.form.get('subjective_notes') or None
+            
+            db_session = get_session(db_url)
+            db = PeptideDB(db_session)
+            
+            injection = db.log_injection(
+                protocol_id=protocol_id,
+                vial_id=vial_id,
+                dose_mcg=dose_mcg,
+                volume_ml=volume_ml,
+                injection_site=site,
+                subjective_notes=notes
+            )
+            
+            db_session.close()
+            flash('Injection logged successfully!', 'success')
+            return redirect(url_for('dashboard'))
+            
+        except (ValueError, TypeError) as e:
+            flash(f'Error logging injection: {e}', 'danger')
+    
+    # Get active protocols and vials
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    protocols = db.list_active_protocols()
+    vials = db.list_active_vials()
+    
+    db_session.close()
+    
+    return render_template('log_injection.html', protocols=protocols, vials=vials)
+
+
+@app.route('/history')
+@login_required
+def history():
+    """View injection history"""
+    days = request.args.get('days', 30, type=int)
+    
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    injections = db.get_recent_injections(days=days)
+    
+    db_session.close()
+    
+    return render_template('history.html', injections=injections, days=days)
+
+
+# ==================== API ROUTES (for AJAX) ====================
+
+@app.route('/api/vials/<int:peptide_id>')
+@login_required
+def api_vials_by_peptide(peptide_id):
+    """Get active vials for a peptide (AJAX endpoint)"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    vials = db.list_active_vials(peptide_id)
+    
+    vials_data = [{
+        'id': v.id,
+        'mg_amount': v.mg_amount,
+        'concentration': v.concentration_mcg_per_ml,
+        'remaining_ml': v.remaining_ml
+    } for v in vials]
+    
+    db_session.close()
+    
+    return jsonify(vials_data)
+
+
+# ==================== ERROR HANDLERS ====================
+
+@app.errorhandler(404)
+def not_found(error):
+    return render_template('404.html'), 404
+
+
+@app.errorhandler(500)
+def server_error(error):
+    return render_template('500.html'), 500
+
+
+# ==================== RUN APPLICATION ====================
+
+if __name__ == '__main__':
+    # Create tables
+    engine = create_engine(db_url)
+    ModelBase.metadata.create_all(engine)
+    
+    print("\n" + "="*60)
+    print("PEPTIDE TRACKER WEB APP")
+    print("="*60)
+    print(f"Database: {db_url}")
+    print("Starting server at: http://127.0.0.1:5000")
+    print("Press CTRL+C to stop")
+    print("="*60 + "\n")
+    
+    app.run(debug=True, host='0.0.0.0', port=5000)

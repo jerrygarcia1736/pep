@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Peptide Tracker{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">
+    <i class="bi bi-speedometer2"></i> Dashboard
+</h1>
+
+<!-- Stats Cards -->
+<div class="row g-4 mb-4">
+    <div class="col-md-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <h5 class="card-title">Active Protocols</h5>
+                <p class="display-4">{{ stats.active_protocols }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body">
+                <h5 class="card-title">Active Vials</h5>
+                <p class="display-4">{{ stats.active_vials }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-info text-white">
+            <div class="card-body">
+                <h5 class="card-title">This Week</h5>
+                <p class="display-4">{{ stats.injections_this_week }}</p>
+                <small>injections</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body">
+                <h5 class="card-title">Peptides</h5>
+                <p class="display-4">{{ stats.total_peptides }}</p>
+                <small>in database</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="card mb-4">
+    <div class="card-header bg-primary text-white">
+        <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Actions</h5>
+    </div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-3">
+                <a href="{{ url_for('log_injection') }}" class="btn btn-lg btn-success w-100">
+                    <i class="bi bi-plus-circle"></i><br>Log Injection
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="{{ url_for('calculator') }}" class="btn btn-lg btn-info w-100">
+                    <i class="bi bi-calculator"></i><br>Calculator
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="{{ url_for('add_vial') }}" class="btn btn-lg btn-warning w-100">
+                    <i class="bi bi-box"></i><br>Add Vial
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="{{ url_for('add_protocol') }}" class="btn btn-lg btn-primary w-100">
+                    <i class="bi bi-calendar-plus"></i><br>New Protocol
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Active Protocols -->
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-calendar-check"></i> Active Protocols</h5>
+            </div>
+            <div class="card-body">
+                {% if protocols %}
+                    <div class="list-group list-group-flush">
+                        {% for protocol in protocols %}
+                        <a href="{{ url_for('protocol_detail', protocol_id=protocol.id) }}" 
+                           class="list-group-item list-group-item-action">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">{{ protocol.name }}</h6>
+                                <small class="text-muted">{{ protocol.peptide.name }}</small>
+                            </div>
+                            <p class="mb-1 small">
+                                <span class="badge bg-primary">{{ protocol.dose_mcg }} mcg</span>
+                                <span class="badge bg-info">{{ protocol.frequency_per_day }}x/day</span>
+                            </p>
+                            <small class="text-muted">
+                                Started: {{ protocol.start_date.strftime('%Y-%m-%d') }}
+                                {% if protocol.end_date %}
+                                | Ends: {{ protocol.end_date.strftime('%Y-%m-%d') }}
+                                {% endif %}
+                            </small>
+                        </a>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="text-muted text-center py-4">
+                        No active protocols. 
+                        <a href="{{ url_for('add_protocol') }}">Create one now</a>
+                    </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Injections -->
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Injections</h5>
+            </div>
+            <div class="card-body">
+                {% if recent_injections %}
+                    <div class="list-group list-group-flush">
+                        {% for injection in recent_injections %}
+                        <div class="list-group-item">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">{{ injection.protocol.peptide.name }}</h6>
+                                <small>{{ injection.timestamp.strftime('%m/%d %H:%M') }}</small>
+                            </div>
+                            <p class="mb-1 small">
+                                <strong>{{ injection.dose_mcg }} mcg</strong> 
+                                ({{ injection.volume_ml }} ml)
+                                {% if injection.injection_site %}
+                                | {{ injection.injection_site }}
+                                {% endif %}
+                            </p>
+                            {% if injection.subjective_notes %}
+                            <small class="text-muted">{{ injection.subjective_notes[:100] }}</small>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <div class="text-center mt-3">
+                        <a href="{{ url_for('history') }}" class="btn btn-sm btn-outline-primary">
+                            View All History
+                        </a>
+                    </div>
+                {% else %}
+                    <p class="text-muted text-center py-4">
+                        No injections logged yet. 
+                        <a href="{{ url_for('log_injection') }}">Log your first one</a>
+                    </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
