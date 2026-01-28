@@ -1,15 +1,20 @@
 """
-Peptide Tracker Web Application (Render-friendly)
+Peptide Tracker Web Application (Template-contract safe)
 
-This version is focused on "stop the 500s" so the site loads again.
-It does NOT implement full business logic yet — it wires the template contract.
+This version is meant to stop the recurring 500s caused by:
+- Missing context variables (e.g., stats)
+- Missing endpoints referenced by url_for() in templates (BuildError)
 
-Includes:
-- Startup-safe migration for users.tier (Postgres/SQLite)
-- Session-based auth (login/register/logout)
-- Jinja globals: current_user, has_endpoint(), tier_at_least()
-- Dashboard context: stats/protocols/recent_injections (safe defaults)
-- Stub routes for template url_for() targets to prevent BuildError
+Adds stubs for ALL endpoints referenced in your dashboard.html:
+- log_injection
+- add_vial
+- add_protocol
+- protocol_detail(protocol_id)
+
+Also keeps:
+- users.tier startup migration (Postgres/SQLite)
+- Jinja helpers: current_user, has_endpoint(), tier_at_least()
+- dashboard context: stats/protocols/recent_injections (safe defaults)
 """
 
 from __future__ import annotations
@@ -34,7 +39,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
 # -----------------------------------------------------------------------------
-# Models (define before create_all)
+# Models
 # -----------------------------------------------------------------------------
 class User(ModelBase):
     __tablename__ = "users"
@@ -132,7 +137,7 @@ def inject_template_helpers():
     return {"current_user": user, "has_endpoint": has_endpoint, "tier_at_least": tier_at_least}
 
 # -----------------------------------------------------------------------------
-# Utility: render a template if it exists, otherwise fall back safely
+# Utility: render template if it exists
 # -----------------------------------------------------------------------------
 def render_if_exists(template_name: str, fallback_endpoint: str = "dashboard", **ctx):
     try:
@@ -144,12 +149,7 @@ def render_if_exists(template_name: str, fallback_endpoint: str = "dashboard", *
 # Dashboard context (safe defaults)
 # -----------------------------------------------------------------------------
 def _compute_dashboard_context() -> Tuple[Dict[str, Any], List[Any], List[Any]]:
-    stats = {
-        "active_protocols": 0,
-        "active_vials": 0,
-        "injections_this_week": 0,
-        "total_peptides": 0,
-    }
+    stats = {"active_protocols": 0, "active_vials": 0, "injections_this_week": 0, "total_peptides": 0}
     protocols: List[Any] = []
     recent_injections: List[Any] = []
 
@@ -257,14 +257,13 @@ def dashboard():
     )
 
 # -----------------------------------------------------------------------------
-# Stub routes to satisfy templates (prevents url_for BuildError)
-# Add more here as logs reveal them.
+# Routes referenced by dashboard.html (stubs)
 # -----------------------------------------------------------------------------
 @app.route("/log-injection", methods=["GET", "POST"])
 @login_required
 def log_injection():
     if request.method == "POST":
-        flash("log_injection is a stub right now.", "info")
+        flash("log_injection is not wired yet (stub).", "info")
         return redirect(url_for("dashboard"))
     return render_if_exists("log_injection.html", fallback_endpoint="dashboard")
 
@@ -272,10 +271,27 @@ def log_injection():
 @login_required
 def add_vial():
     if request.method == "POST":
-        flash("add_vial is a stub right now.", "info")
+        flash("add_vial is not wired yet (stub).", "info")
         return redirect(url_for("dashboard"))
     return render_if_exists("add_vial.html", fallback_endpoint="dashboard")
 
+@app.route("/add-protocol", methods=["GET", "POST"])
+@login_required
+def add_protocol():
+    if request.method == "POST":
+        flash("add_protocol is not wired yet (stub).", "info")
+        return redirect(url_for("dashboard"))
+    return render_if_exists("add_protocol.html", fallback_endpoint="dashboard")
+
+@app.route("/protocols/<int:protocol_id>")
+@login_required
+def protocol_detail(protocol_id: int):
+    # Stub detail page; lets dashboard links render.
+    return render_if_exists("protocol_detail.html", fallback_endpoint="protocols", protocol_id=protocol_id)
+
+# -----------------------------------------------------------------------------
+# Other common pages (safe)
+# -----------------------------------------------------------------------------
 @app.route("/peptides")
 @login_required
 def peptides():
