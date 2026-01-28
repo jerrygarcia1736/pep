@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Log Food - Peptide Tracker{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <h1 class="mb-4"><i class="bi bi-egg-fried"></i> Log Food</h1>
+            
+            <div class="card shadow-sm">
+                <div class="card-body p-4">
+                    <form method="POST">
+                        <div class="mb-4">
+                            <label for="food_description" class="form-label">
+                                <strong>What did you eat?</strong>
+                            </label>
+                            <textarea id="food_description" 
+                                      name="food_description" 
+                                      class="form-control form-control-lg" 
+                                      rows="3"
+                                      placeholder="e.g., 2 eggs, 1 slice of whole wheat toast, 1 medium apple"
+                                      required
+                                      autofocus></textarea>
+                            <small class="text-muted form-text">
+                                Describe your food naturally. Be specific with quantities and preparation methods.
+                            </small>
+                        </div>
+                        
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary btn-lg">
+                                <i class="bi bi-check-circle"></i> Log Food & Get Nutrition
+                            </button>
+                            <a href="{{ url_for('nutrition') }}" class="btn btn-outline-secondary">
+                                <i class="bi bi-arrow-left"></i> Back to Dashboard
+                            </a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Tips Card -->
+            <div class="card mt-4 bg-light">
+                <div class="card-body">
+                    <h6 class="mb-3"><i class="bi bi-lightbulb"></i> Tips for Accurate Tracking:</h6>
+                    <ul class="mb-0 small">
+                        <li><strong>Include quantities:</strong> "2 eggs" instead of just "eggs"</li>
+                        <li><strong>Be specific:</strong> "grilled chicken breast" vs "chicken"</li>
+                        <li><strong>Mention prep:</strong> "fried", "grilled", "baked", etc.</li>
+                        <li><strong>Multiple items:</strong> List all items in one entry separated by commas</li>
+                        <li><strong>Use common units:</strong> "1 cup", "2 oz", "100g", "1 medium apple"</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <!-- Example Card -->
+            <div class="card mt-3">
+                <div class="card-header bg-success text-white">
+                    <h6 class="mb-0"><i class="bi bi-check-circle"></i> Good Examples</h6>
+                </div>
+                <div class="card-body">
+                    <p class="mb-2 small"><i class="bi bi-dot"></i> "2 scrambled eggs with cheese, 1 slice whole wheat toast, 1 cup of black coffee"</p>
+                    <p class="mb-2 small"><i class="bi bi-dot"></i> "6 oz grilled chicken breast, 1 cup brown rice, 1 cup steamed broccoli"</p>
+                    <p class="mb-2 small"><i class="bi bi-dot"></i> "1 scoop whey protein powder, 1 banana, 1 cup almond milk"</p>
+                    <p class="mb-0 small"><i class="bi bi-dot"></i> "Large pepperoni pizza, 2 slices"</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
