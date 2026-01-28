@@ -1,5 +1,114 @@
-{% extends "base.html" %} 
-{% block content %} 
-<h1>Welcome to Peptide Tracker</h1> 
-<a href="/register">Register</a> <a href="/login">Login</a> 
+{% extends "base.html" %}
+
+{% block title %}Welcome - Peptide Tracker{% endblock %}
+
+{% block content %}
+<div class="row align-items-center" style="min-height: 70vh;">
+    <div class="col-lg-6">
+        <h1 class="display-4 fw-bold mb-4">
+            <i class="bi bi-capsule text-primary"></i> Peptide Tracker
+        </h1>
+        <p class="lead mb-4">
+            Your comprehensive solution for managing peptide protocols, tracking injections, 
+            and calculating reconstitution dosages.
+        </p>
+        
+        <div class="row g-3 mb-4">
+            <div class="col-md-6">
+                <div class="card border-primary">
+                    <div class="card-body">
+                        <i class="bi bi-calculator fs-1 text-primary"></i>
+                        <h5 class="card-title mt-2">Smart Calculator</h5>
+                        <p class="card-text small">Precise reconstitution calculations</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card border-success">
+                    <div class="card-body">
+                        <i class="bi bi-graph-up fs-1 text-success"></i>
+                        <h5 class="card-title mt-2">Track Progress</h5>
+                        <p class="card-text small">Monitor protocols and injections</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card border-info">
+                    <div class="card-body">
+                        <i class="bi bi-database fs-1 text-info"></i>
+                        <h5 class="card-title mt-2">Peptide Database</h5>
+                        <p class="card-text small">10+ common peptides pre-loaded</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card border-warning">
+                    <div class="card-body">
+                        <i class="bi bi-shield-check fs-1 text-warning"></i>
+                        <h5 class="card-title mt-2">Secure & Private</h5>
+                        <p class="card-text small">Your data stays private</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="d-grid gap-2 d-md-flex">
+            <a href="{{ url_for('register') }}" class="btn btn-primary btn-lg px-4">
+                Get Started Free
+            </a>
+            <a href="{{ url_for('login') }}" class="btn btn-outline-secondary btn-lg px-4">
+                Login
+            </a>
+        </div>
+    </div>
+    
+    <div class="col-lg-6">
+        <div class="card shadow-lg">
+            <div class="card-body p-5">
+                <h3 class="mb-4">Features</h3>
+                <ul class="list-unstyled">
+                    <li class="mb-3">
+                        <i class="bi bi-check-circle-fill text-success me-2"></i>
+                        <strong>Reconstitution Calculator</strong> - Calculate concentrations and dosages
+                    </li>
+                    <li class="mb-3">
+                        <i class="bi bi-check-circle-fill text-success me-2"></i>
+                        <strong>Vial Management</strong> - Track inventory and expiration dates
+                    </li>
+                    <li class="mb-3">
+                        <i class="bi bi-check-circle-fill text-success me-2"></i>
+                        <strong>Protocol Creation</strong> - Define dosing schedules and cycles
+                    </li>
+                    <li class="mb-3">
+                        <i class="bi bi-check-circle-fill text-success me-2"></i>
+                        <strong>Injection Logging</strong> - Record each injection with notes
+                    </li>
+                    <li class="mb-3">
+                        <i class="bi bi-check-circle-fill text-success me-2"></i>
+                        <strong>Research Database</strong> - Store studies and notes
+                    </li>
+                    <li class="mb-3">
+                        <i class="bi bi-check-circle-fill text-success me-2"></i>
+                        <strong>Progress Tracking</strong> - Monitor your protocols over time
+                    </li>
+                </ul>
+                
+                <div class="alert alert-info mt-4">
+                    <i class="bi bi-info-circle me-2"></i>
+                    <strong>Free to start!</strong> Track up to 2 peptides and create unlimited protocols.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-5">
+    <div class="col-12">
+        <div class="alert alert-warning">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            <strong>Disclaimer:</strong> This tool is for informational and organizational purposes only. 
+            Not medical advice. Consult healthcare professionals before using any peptides.
+        </div>
+    </div>
+</div>
 {% endblock %}

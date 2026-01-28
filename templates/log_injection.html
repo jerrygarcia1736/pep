@@ -1,1 +1,87 @@
-Coming Soon 
+{% extends "base.html" %}
+
+{% block title %}Log Injection - Peptide Tracker{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">
+    <i class="bi bi-plus-circle"></i> Log Injection
+</h1>
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body">
+                <form method="POST">
+                    <div class="mb-3">
+                        <label for="protocol_id" class="form-label">Protocol</label>
+                        <select class="form-select" id="protocol_id" name="protocol_id" required>
+                            <option value="">Select protocol...</option>
+                            {% for protocol in protocols %}
+                            <option value="{{ protocol.id }}">
+                                {{ protocol.name }} - {{ protocol.peptide.name }} ({{ protocol.dose_mcg }} mcg)
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="vial_id" class="form-label">Vial</label>
+                        <select class="form-select" id="vial_id" name="vial_id" required>
+                            <option value="">Select vial...</option>
+                            {% for vial in vials %}
+                            <option value="{{ vial.id }}">
+                                {{ vial.peptide.name }} - {{ vial.mg_amount }}mg ({{ vial.concentration_mcg_per_ml }} mcg/ml, {{ vial.remaining_ml }}ml left)
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="dose_mcg" class="form-label">Dose (mcg)</label>
+                            <input type="number" step="0.1" class="form-control" id="dose_mcg" name="dose_mcg" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="volume_ml" class="form-label">Volume (ml)</label>
+                            <input type="number" step="0.01" class="form-control" id="volume_ml" name="volume_ml" required>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="injection_site" class="form-label">Injection Site (optional)</label>
+                        <input type="text" class="form-control" id="injection_site" name="injection_site" 
+                               placeholder="e.g., abdomen, thigh, shoulder">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="subjective_notes" class="form-label">Notes (optional)</label>
+                        <textarea class="form-control" id="subjective_notes" name="subjective_notes" rows="3" 
+                                  placeholder="How did you feel? Any side effects? Progress notes..."></textarea>
+                    </div>
+                    
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-success btn-lg">
+                            <i class="bi bi-check-circle"></i> Log Injection
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card bg-light">
+            <div class="card-body">
+                <h5><i class="bi bi-info-circle"></i> Tips</h5>
+                <ul class="small">
+                    <li>Select the protocol you're following</li>
+                    <li>Choose the vial you're using</li>
+                    <li>Enter the actual dose and volume injected</li>
+                    <li>Note the injection site for rotation tracking</li>
+                    <li>Add subjective notes about effects or side effects</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Create Protocol{% endblock %}
+{% block content %}
+<h1 class="mb-4"><i class="bi bi-calendar-plus"></i> Create Protocol</h1>
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body">
+                <form method="POST">
+                    <div class="mb-3">
+                        <label for="peptide_id" class="form-label">Peptide</label>
+                        <select class="form-select" id="peptide_id" name="peptide_id" required>
+                            <option value="">Select peptide...</option>
+                            {% for peptide in peptides %}
+                            <option value="{{ peptide.id }}">{{ peptide.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="name" class="form-label">Protocol Name</label>
+                        <input type="text" class="form-control" id="name" name="name" required 
+                               placeholder="e.g., BPC-157 Recovery Protocol">
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="dose_mcg" class="form-label">Dose (mcg)</label>
+                            <input type="number" step="1" class="form-control" id="dose_mcg" name="dose_mcg" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="frequency_per_day" class="form-label">Times Per Day</label>
+                            <input type="number" step="1" class="form-control" id="frequency_per_day" name="frequency_per_day" required>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="duration_days" class="form-label">Duration (days)</label>
+                        <input type="number" step="1" class="form-control" id="duration_days" name="duration_days" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="goals" class="form-label">Goals (optional)</label>
+                        <textarea class="form-control" id="goals" name="goals" rows="3" 
+                                  placeholder="What do you hope to achieve?"></textarea>
+                    </div>
+                    
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="bi bi-check-circle"></i> Create Protocol
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

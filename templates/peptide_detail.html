@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}{{ peptide.name }} - Peptide Tracker{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{{ url_for('peptides') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Back to Peptides
+    </a>
+</div>
+
+<h1 class="mb-4">{{ peptide.name }}</h1>
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h6 class="text-muted">{{ peptide.common_name }}</h6>
+                <p class="mt-3">{{ peptide.primary_benefits }}</p>
+                
+                <hr>
+                
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <strong>Dose:</strong> {{ peptide.typical_dose_min }}-{{ peptide.typical_dose_max }} mcg
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <strong>Frequency:</strong> {{ peptide.frequency_per_day }}x/day
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <strong>Half-Life:</strong> {{ peptide.half_life_hours }} hours
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <strong>Route:</strong> {{ peptide.primary_route.value }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-body">
+                <h5>Quick Actions</h5>
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('calculator') }}" class="btn btn-primary">Calculator</a>
+                    <a href="{{ url_for('add_vial') }}" class="btn btn-success">Add Vial</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
