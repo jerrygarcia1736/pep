@@ -8,6 +8,7 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block head %}{% endblock %}
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark" style="background:#1673ff;">
@@ -22,25 +23,32 @@
     <div class="collapse navbar-collapse" id="navMain">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
         <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
-
-        <!-- Pep AI: always clickable; gate inside /chat if needed -->
         <li class="nav-item"><a class="nav-link" href="{{ url_for('chat') }}"><i class="bi bi-chat-dots"></i> Pep AI</a></li>
-
         <li class="nav-item"><a class="nav-link" href="{{ url_for('calculator') }}"><i class="bi bi-calculator"></i> Peptide Calculator</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('protocols') }}"><i class="bi bi-clipboard2-check"></i> Protocols</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('vials') }}"><i class="bi bi-box"></i> Vials</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('history') }}"><i class="bi bi-clock-history"></i> History</a></li>
-        <li class="nav-item"><a class="nav-link" href="{{ url_for('peptides') }}"><i class="bi bi-capsule"></i> Peptides</a></li>
+
+        {# Nutrition (CalorieNinjas) #}
+        {% if has_endpoint is defined and has_endpoint('food') %}
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('food') }}"><i class="bi bi-egg-fried"></i> Nutrition</a></li>
+        {% elif has_endpoint is not defined %}
+          {# If you don't use has_endpoint helper, still show it; harmless if endpoint exists #}
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('food') }}"><i class="bi bi-egg-fried"></i> Nutrition</a></li>
+        {% endif %}
       </ul>
 
-      {% if current_user.is_authenticated %}
+      {% if current_user is defined and current_user.is_authenticated %}
       <div class="dropdown">
-        <a class="nav-link dropdown-toggle text-white d-flex align-items-center gap-2" href="#" id="userDrop" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+        <a class="nav-link dropdown-toggle text-white" href="#" id="userDrop" role="button" data-bs-toggle="dropdown" aria-expanded="false">
           <i class="bi bi-person-circle"></i> {{ current_user.email }}
-          <span class="badge text-bg-light text-dark">{{ (current_user.tier or "free") }}</span>
         </a>
         <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDrop">
-          <li><a class="dropdown-item" href="{{ url_for('coaching') }}"><i class="bi bi-stars"></i> Coaching</a></li>
+          {% if has_endpoint is defined and has_endpoint('coaching') %}
+            <li><a class="dropdown-item" href="{{ url_for('coaching') }}"><i class="bi bi-stars"></i> Coaching (Tier1)</a></li>
+          {% else %}
+            <li><a class="dropdown-item" href="/coaching"><i class="bi bi-stars"></i> Coaching (Tier1)</a></li>
+          {% endif %}
           <li><hr class="dropdown-divider"></li>
           <li><a class="dropdown-item" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i> Logout</a></li>
         </ul>
@@ -53,6 +61,19 @@
 </nav>
 
 <main class="container-fluid py-4">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="container-fluid">
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
   {% block content %}{% endblock %}
 </main>
 
@@ -60,16 +81,16 @@
   <div>{{ app_name }} © 2026 | For informational purposes only</div>
   <div>Not medical advice. Consult healthcare professionals.</div>
 
-  <!-- Scientific references -->
+  {# Scientific links (footer) #}
   <div class="mt-2 small">
-    <span class="me-2">Scientific research:</span>
-    <a class="text-muted" href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank" rel="noopener">PubMed</a>
-    <span class="mx-2">•</span>
-    <a class="text-muted" href="https://clinicaltrials.gov/" target="_blank" rel="noopener">ClinicalTrials.gov</a>
-    <span class="mx-2">•</span>
-    <a class="text-muted" href="https://ods.od.nih.gov/" target="_blank" rel="noopener">NIH ODS</a>
-    <span class="mx-2">•</span>
-    <a class="text-muted" href="https://www.fda.gov/" target="_blank" rel="noopener">FDA</a>
+    <span class="me-2">Research:</span>
+    <a class="link-secondary" href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank" rel="noopener">PubMed</a>
+    <span class="mx-1">•</span>
+    <a class="link-secondary" href="https://clinicaltrials.gov/" target="_blank" rel="noopener">ClinicalTrials.gov</a>
+    <span class="mx-1">•</span>
+    <a class="link-secondary" href="https://www.nih.gov/" target="_blank" rel="noopener">NIH</a>
+    <span class="mx-1">•</span>
+    <a class="link-secondary" href="https://www.fda.gov/" target="_blank" rel="noopener">FDA</a>
   </div>
 </footer>
 
