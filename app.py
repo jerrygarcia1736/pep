@@ -2,9 +2,10 @@
 Peptide Tracker Web Application
 Flask web interface with session-based auth and tier support
 
-Fixes:
+Fixes included:
 - Ensure users.tier exists in Postgres (startup-safe migration)
 - Inject current_user + has_endpoint + tier_at_least into Jinja
+- Provide the `stats` context expected by templates/dashboard.html
 """
 
 from __future__ import annotations
@@ -60,7 +61,6 @@ def ensure_users_tier_column(engine):
         dialect = (engine.dialect.name or "").lower()
         if dialect.startswith("postgres"):
             with engine.begin() as conn:
-                # IF EXISTS avoids failure if table isn't there yet
                 conn.execute(
                     text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'free';")
                 )
@@ -76,7 +76,6 @@ def ensure_users_tier_column(engine):
                 except Exception:
                     pass
     except Exception as e:
-        # Do not crash the whole app on migration attempts; log and continue
         print(f"Warning: could not ensure users.tier column: {e}")
 
 # Create tables first (including users if missing), then ensure tier exists on legacy tables
@@ -218,14 +217,62 @@ def logout():
     flash("Logged out.", "info")
     return redirect(url_for("login"))
 
+def _compute_dashboard_context():
+    """
+    dashboard.html expects at least: stats.active_protocols, etc.
+    If your full DB modules exist, we compute real values.
+    Otherwise, we return safe defaults so the UI loads.
+    """
+    # safe defaults
+    stats = {
+        "active_protocols": 0,
+        "active_vials": 0,
+        "injections_this_week": 0,
+        "total_peptides": 0,
+    }
+    protocols = []
+    recent_injections = []
+
+    try:
+        # These imports exist in your original project; keep them optional.
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
+            recent_injections = getattr(pdb, "get_recent_injections", lambda days=7: [])(days=7)
+            active_vials = getattr(pdb, "list_active_vials", lambda: [])()
+            all_peptides = getattr(pdb, "list_peptides", lambda: [])()
+            stats = {
+                "active_protocols": len(protocols),
+                "active_vials": len(active_vials),
+                "injections_this_week": len(recent_injections),
+                "total_peptides": len(all_peptides),
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        # If anything in the DB layer breaks, do not 500 the dashboard.
+        print(f"Dashboard context fallback (non-fatal): {e}")
+
+    return stats, protocols, recent_injections
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    return render_template("dashboard.html")
+    stats, protocols, recent_injections = _compute_dashboard_context()
+    # dashboard.html in your app uses stats + protocols + recent injections
+    return render_template(
+        "dashboard.html",
+        stats=stats,
+        protocols=protocols,
+        recent_injections=(recent_injections[:5] if isinstance(recent_injections, list) else recent_injections),
+    )
 
 @app.route("/peptides")
 @login_required
 def peptides():
+    # If peptides.html expects peptide data, you can extend similarly later.
     return render_template("peptides.html")
 
 # Optional placeholder so nav doesn't break if referenced
