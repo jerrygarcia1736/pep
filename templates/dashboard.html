@@ -110,7 +110,31 @@
         <p class="text-muted mt-2 mb-0">Quick links to the core pages.</p>
       </div>
     </div>
+  <!-- Quick Peptides -->
+<div class="row mt-4">
+  <div class="col-12">
+    <div class="card shadow-sm border-0">
+      <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-capsule me-2"></i>Quick Peptides</h5>
+      </div>
+      <div class="card-body">
+        <p class="text-muted mb-3">Shortcuts to commonly tracked peptides (names only — details are set when you create a protocol).</p>
+        <div class="d-flex flex-wrap gap-2">
+          <span class="badge bg-light text-dark border px-3 py-2">KPV</span>
+          <span class="badge bg-light text-dark border px-3 py-2">DSIP</span>
+          <span class="badge bg-light text-dark border px-3 py-2">CJC-1295</span>
+          <span class="badge bg-light text-dark border px-3 py-2">Ipamorelin</span>
+          <span class="badge bg-light text-dark border px-3 py-2">Selank</span>
+        </div>
+        <div class="small text-muted mt-3">
+          Tip: If you want these to be “one-click start”, add matching templates in <code>Protocols.html</code> and point these badges/buttons to <code>{{ "{{ url_for('add_protocol') }}" }}</code> with <code>?template=...</code>.
+        </div>
+      </div>
+    </div>
   </div>
+</div>
+
+</div>
 </div>
 
 <!-- Age Slider (Recommendations) -->
