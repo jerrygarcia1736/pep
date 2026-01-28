@@ -20,15 +20,17 @@ Also keeps:
 from __future__ import annotations
 
 import os
-from datetime import datetime
+import json
+import requests
+from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any, Dict, List, Tuple
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from jinja2 import TemplateNotFound
 
-from sqlalchemy import Column, Integer, String, DateTime, text
+from sqlalchemy import Column, Integer, String, DateTime, Float, text
 from config import Config
 from models import get_session, create_engine, Base as ModelBase
 
@@ -56,6 +58,24 @@ class User(ModelBase):
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
+
+# Food log model for nutrition tracking
+class FoodLog(ModelBase):
+    __tablename__ = "food_logs"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    description = Column(String(500), nullable=False)
+    
+    # Nutrition totals
+    total_calories = Column(Float, default=0)
+    total_protein_g = Column(Float, default=0)
+    total_fat_g = Column(Float, default=0)
+    total_carbs_g = Column(Float, default=0)
+    
+    # Raw API response
+    raw_data = Column(String(5000))
 
 # -----------------------------------------------------------------------------
 # DB init + migration
@@ -290,29 +310,143 @@ def protocol_detail(protocol_id: int):
     return render_if_exists("protocol_detail.html", fallback_endpoint="protocols", protocol_id=protocol_id)
 
 # -----------------------------------------------------------------------------
-# Nutrition tracking (stub routes for now)
+# Nutrition tracking with Calorie Ninja API
 # -----------------------------------------------------------------------------
+CALORIE_NINJA_API_KEY = os.environ.get("CALORIE_NINJA_API_KEY")
+
 @app.route("/nutrition")
 @login_required
 def nutrition():
     """Nutrition dashboard - shows food logs and daily totals"""
-    # Stub for now - would show calorie tracking
-    return render_if_exists("nutrition.html", fallback_endpoint="dashboard",
-                          today_logs=[],
-                          daily_calories=0,
-                          daily_protein=0,
-                          daily_fat=0,
-                          daily_carbs=0,
-                          daily_data={})
+    db = get_session(db_url)
+    try:
+        # Get today's food logs
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_logs = db.query(FoodLog).filter(
+            FoodLog.user_id == session["user_id"],
+            FoodLog.timestamp >= today_start
+        ).order_by(FoodLog.timestamp.desc()).all()
+        
+        # Calculate daily totals
+        daily_calories = sum(log.total_calories or 0 for log in today_logs)
+        daily_protein = sum(log.total_protein_g or 0 for log in today_logs)
+        daily_fat = sum(log.total_fat_g or 0 for log in today_logs)
+        daily_carbs = sum(log.total_carbs_g or 0 for log in today_logs)
+        
+        # Get last 7 days
+        week_ago = datetime.utcnow() - timedelta(days=7)
+        week_logs = db.query(FoodLog).filter(
+            FoodLog.user_id == session["user_id"],
+            FoodLog.timestamp >= week_ago
+        ).all()
+        
+        # Group by day
+        daily_data = {}
+        for log in week_logs:
+            day_key = log.timestamp.strftime('%Y-%m-%d')
+            if day_key not in daily_data:
+                daily_data[day_key] = 0
+            daily_data[day_key] += log.total_calories or 0
+        
+        return render_if_exists("nutrition.html", fallback_endpoint="dashboard",
+                              today_logs=today_logs,
+                              daily_calories=daily_calories,
+                              daily_protein=daily_protein,
+                              daily_fat=daily_fat,
+                              daily_carbs=daily_carbs,
+                              daily_data=daily_data)
+    finally:
+        db.close()
 
 @app.route("/log-food", methods=["GET", "POST"])
 @login_required
 def log_food():
-    """Log food entry"""
+    """Log food entry using Calorie Ninja API"""
     if request.method == "POST":
-        flash("Food logging is not fully wired yet. Coming soon!", "info")
-        return redirect(url_for("nutrition"))
+        food_description = (request.form.get("food_description") or "").strip()
+        
+        if not food_description:
+            flash("Please describe what you ate.", "warning")
+            return redirect(url_for("log_food"))
+        
+        if not CALORIE_NINJA_API_KEY:
+            flash("Nutrition API not configured. Please contact support.", "error")
+            return redirect(url_for("log_food"))
+        
+        # Call Calorie Ninja API
+        api_url = "https://api.calorieninjas.com/v1/nutrition?query="
+        headers = {"X-Api-Key": CALORIE_NINJA_API_KEY}
+        
+        try:
+            response = requests.get(
+                api_url + food_description,
+                headers=headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get("items") and len(data["items"]) > 0:
+                    # Calculate totals
+                    total_calories = sum(item.get("calories", 0) for item in data["items"])
+                    total_protein = sum(item.get("protein_g", 0) for item in data["items"])
+                    total_fat = sum(item.get("fat_total_g", 0) for item in data["items"])
+                    total_carbs = sum(item.get("carbohydrates_total_g", 0) for item in data["items"])
+                    
+                    # Save to database
+                    db = get_session(db_url)
+                    try:
+                        food_log = FoodLog(
+                            user_id=session["user_id"],
+                            description=food_description,
+                            total_calories=total_calories,
+                            total_protein_g=total_protein,
+                            total_fat_g=total_fat,
+                            total_carbs_g=total_carbs,
+                            raw_data=json.dumps(data)
+                        )
+                        db.add(food_log)
+                        db.commit()
+                        flash(f"✓ Logged: {food_description} - {total_calories:.0f} calories", "success")
+                        return redirect(url_for("nutrition"))
+                    finally:
+                        db.close()
+                else:
+                    flash("Could not find nutrition data. Try being more specific (e.g., '2 eggs and 1 slice of toast').", "warning")
+            elif response.status_code == 401:
+                flash("API key invalid. Please check configuration.", "error")
+            else:
+                flash(f"API Error: {response.status_code}. Please try again.", "error")
+        
+        except requests.exceptions.Timeout:
+            flash("Request timed out. Please try again.", "error")
+        except Exception as e:
+            print(f"Calorie Ninja API error: {e}")
+            flash("Error connecting to nutrition database. Please try again.", "error")
+    
     return render_if_exists("log_food.html", fallback_endpoint="nutrition")
+
+@app.route("/delete-food/<int:food_id>", methods=["POST"])
+@login_required
+def delete_food(food_id: int):
+    """Delete a food log entry"""
+    db = get_session(db_url)
+    try:
+        food_log = db.query(FoodLog).filter_by(
+            id=food_id,
+            user_id=session["user_id"]
+        ).first()
+        
+        if food_log:
+            db.delete(food_log)
+            db.commit()
+            flash("Food entry deleted.", "success")
+    finally:
+        db.close()
+    
+    return redirect(url_for("nutrition"))
+
 
 # -----------------------------------------------------------------------------
 # Other common pages (safe)
