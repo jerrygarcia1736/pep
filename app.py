@@ -563,6 +563,52 @@ def delete_food(food_id: int):
     return redirect(url_for("nutrition"))
 
 
+@app.route("/api/log-food", methods=["POST"])
+@login_required
+def api_log_food():
+    """API endpoint to log food from USDA data"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"success": False, "error": "No data provided"}), 400
+        
+        description = data.get("description")
+        total_calories = data.get("total_calories", 0)
+        total_protein_g = data.get("total_protein_g", 0)
+        total_carbs_g = data.get("total_carbs_g", 0)
+        total_fat_g = data.get("total_fat_g", 0)
+        
+        if not description:
+            return jsonify({"success": False, "error": "Description is required"}), 400
+        
+        db = get_session(db_url)
+        try:
+            food_log = FoodLog(
+                user_id=session["user_id"],
+                description=description,
+                total_calories=total_calories,
+                total_protein_g=total_protein_g,
+                total_fat_g=total_fat_g,
+                total_carbs_g=total_carbs_g,
+                raw_data=json.dumps(data)
+            )
+            db.add(food_log)
+            db.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Food logged successfully",
+                "food_id": food_log.id
+            })
+        finally:
+            db.close()
+            
+    except Exception as e:
+        print(f"Error logging food: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # -----------------------------------------------------------------------------
 # Other common pages (safe)
 # -----------------------------------------------------------------------------

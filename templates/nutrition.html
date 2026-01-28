@@ -1,141 +1,406 @@
 {% extends "base.html" %}
 
-{% block title %}Nutrition - Peptide Tracker{% endblock %}
+{% block title %}Nutrition - PeptideTracker.ai{% endblock %}
 
 {% block content %}
-<div class="container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1 class="mb-0"><i class="bi bi-graph-up"></i> Nutrition Dashboard</h1>
-        <a href="{{ url_for('log_food') }}" class="btn btn-primary">
-            <i class="bi bi-plus-circle"></i> Log Food
-        </a>
-    </div>
-    
-    <!-- Daily Totals Cards -->
-    <div class="row mb-4">
-        <div class="col-md-3 mb-3">
-            <div class="card text-center shadow-sm">
-                <div class="card-body">
-                    <div class="text-primary" style="font-size: 2.5rem;">
-                        <i class="bi bi-fire"></i>
-                    </div>
-                    <h2 class="text-primary mb-0">{{ daily_calories|int }}</h2>
-                    <p class="text-muted mb-0">Calories</p>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3 mb-3">
-            <div class="card text-center shadow-sm">
-                <div class="card-body">
-                    <div class="text-success" style="font-size: 2.5rem;">
-                        <i class="bi bi-egg"></i>
-                    </div>
-                    <h2 class="text-success mb-0">{{ daily_protein|int }}g</h2>
-                    <p class="text-muted mb-0">Protein</p>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3 mb-3">
-            <div class="card text-center shadow-sm">
-                <div class="card-body">
-                    <div class="text-warning" style="font-size: 2.5rem;">
-                        <i class="bi bi-droplet-fill"></i>
-                    </div>
-                    <h2 class="text-warning mb-0">{{ daily_fat|int }}g</h2>
-                    <p class="text-muted mb-0">Fat</p>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3 mb-3">
-            <div class="card text-center shadow-sm">
-                <div class="card-body">
-                    <div class="text-info" style="font-size: 2.5rem;">
-                        <i class="bi bi-collection"></i>
-                    </div>
-                    <h2 class="text-info mb-0">{{ daily_carbs|int }}g</h2>
-                    <p class="text-muted mb-0">Carbs</p>
-                </div>
+<h1 class="mb-4">
+    <i class="bi bi-egg-fried"></i> Nutrition Tracker
+</h1>
+
+<!-- Today's Summary Cards -->
+<div class="row g-4 mb-4">
+    <div class="col-md-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <h5 class="card-title">Calories</h5>
+                <p class="display-4">{{ daily_calories|round|int }}</p>
+                <small>today</small>
             </div>
         </div>
     </div>
-    
-    <!-- Today's Meals -->
-    <div class="card shadow-sm mb-4">
-        <div class="card-header bg-light">
-            <h5 class="mb-0"><i class="bi bi-calendar-day"></i> Today's Meals</h5>
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body">
+                <h5 class="card-title">Protein</h5>
+                <p class="display-4">{{ daily_protein|round|int }}g</p>
+                <small>today</small>
+            </div>
         </div>
-        <div class="card-body">
-            {% if today_logs %}
-            <div class="list-group list-group-flush">
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body">
+                <h5 class="card-title">Carbs</h5>
+                <p class="display-4">{{ daily_carbs|round|int }}g</p>
+                <small>today</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-danger text-white">
+            <div class="card-body">
+                <h5 class="card-title">Fat</h5>
+                <p class="display-4">{{ daily_fat|round|int }}g</p>
+                <small>today</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Food Search Card -->
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light">
+        <h5 class="mb-0"><i class="bi bi-search"></i> Search Food Database</h5>
+    </div>
+    <div class="card-body">
+        <!-- Search Form -->
+        <div class="row g-3 mb-3">
+            <div class="col-md-8">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" 
+                           class="form-control" 
+                           id="foodSearch" 
+                           placeholder="Search for food (e.g., chicken breast, apple, protein powder...)"
+                           autocomplete="off">
+                    <button class="btn btn-primary" type="button" id="searchBtn">
+                        Search
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <button class="btn btn-success w-100" type="button" id="barcodeBtn">
+                    <i class="bi bi-upc-scan"></i> Scan Barcode
+                </button>
+            </div>
+        </div>
+
+        <!-- Barcode Input (Hidden by default) -->
+        <div id="barcodeInput" class="alert alert-success" style="display: none;">
+            <div class="input-group">
+                <span class="input-group-text"><i class="bi bi-upc"></i></span>
+                <input type="text" 
+                       class="form-control" 
+                       id="barcodeValue" 
+                       placeholder="Enter barcode/UPC number (e.g., 041220576821)">
+                <button class="btn btn-success" type="button" id="barcodeLookupBtn">
+                    Lookup
+                </button>
+                <button class="btn btn-secondary" type="button" id="barcodeCancelBtn">
+                    Cancel
+                </button>
+            </div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loadingIndicator" class="text-center py-4" style="display: none;">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="text-muted mt-2">Searching...</p>
+        </div>
+
+        <!-- Search Results -->
+        <div id="searchResults" class="mt-3"></div>
+
+        <!-- Selected Food Details -->
+        <div id="foodDetails" class="mt-3"></div>
+    </div>
+</div>
+
+<!-- Today's Food Log -->
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-list-ul"></i> Today's Food Log</h5>
+        <small class="text-muted">{{ today_logs|length }} entries</small>
+    </div>
+    <div class="card-body">
+        {% if today_logs %}
+            <div class="list-group">
                 {% for log in today_logs %}
                 <div class="list-group-item">
                     <div class="d-flex justify-content-between align-items-start">
                         <div class="flex-grow-1">
                             <h6 class="mb-1">{{ log.description }}</h6>
-                            <small class="text-muted">
-                                <i class="bi bi-clock"></i> {{ log.timestamp.strftime('%I:%M %p') }}
-                            </small>
-                        </div>
-                        <div class="text-end ms-3">
-                            <div class="fw-bold text-primary" style="font-size: 1.1rem;">
-                                {{ log.total_calories|int }} cal
+                            <div class="small text-muted">
+                                {{ log.timestamp.strftime('%I:%M %p') }}
                             </div>
-                            <small class="text-muted d-block">
-                                P: {{ log.total_protein_g|int }}g | 
-                                C: {{ log.total_carbs_g|int }}g | 
-                                F: {{ log.total_fat_g|int }}g
-                            </small>
-                            <form method="POST" action="{{ url_for('delete_food', food_id=log.id) }}" 
-                                  style="display: inline;" 
-                                  onsubmit="return confirm('Delete this entry?');">
-                                <button type="submit" class="btn btn-sm btn-outline-danger mt-1">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                            </form>
+                            <div class="mt-2">
+                                <span class="badge bg-primary me-1">{{ log.total_calories|round|int }} cal</span>
+                                <span class="badge bg-success me-1">P: {{ log.total_protein_g|round|int }}g</span>
+                                <span class="badge bg-warning text-dark me-1">C: {{ log.total_carbs_g|round|int }}g</span>
+                                <span class="badge bg-danger">F: {{ log.total_fat_g|round|int }}g</span>
+                            </div>
                         </div>
+                        <form method="POST" action="{{ url_for('delete_food', food_id=log.id) }}" class="ms-3">
+                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this entry?')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
                     </div>
                 </div>
                 {% endfor %}
             </div>
-            {% else %}
-            <div class="text-center py-5">
-                <i class="bi bi-egg-fried" style="font-size: 4rem; color: #ddd;"></i>
-                <p class="text-muted mt-3 mb-4">No meals logged today</p>
-                <a href="{{ url_for('log_food') }}" class="btn btn-primary">
-                    <i class="bi bi-plus-circle"></i> Log Your First Meal
-                </a>
-            </div>
-            {% endif %}
-        </div>
+        {% else %}
+            <p class="text-muted text-center py-4">
+                No food logged today. Search above to add food!
+            </p>
+        {% endif %}
     </div>
-    
-    <!-- Week Overview -->
-    {% if daily_data %}
-    <div class="card shadow-sm">
-        <div class="card-header bg-light">
-            <h5 class="mb-0"><i class="bi bi-bar-chart"></i> 7-Day Overview</h5>
-        </div>
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-hover">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th class="text-end">Calories</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for day, calories in daily_data.items()|sort(reverse=True) %}
-                        <tr>
-                            <td>{{ day }}</td>
-                            <td class="text-end">{{ calories|int }} cal</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    {% endif %}
 </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Search functionality
+document.getElementById('searchBtn').addEventListener('click', searchFood);
+document.getElementById('foodSearch').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') searchFood();
+});
+
+// Barcode functionality
+document.getElementById('barcodeBtn').addEventListener('click', function() {
+    document.getElementById('barcodeInput').style.display = 'block';
+    document.getElementById('barcodeValue').focus();
+});
+
+document.getElementById('barcodeCancelBtn').addEventListener('click', function() {
+    document.getElementById('barcodeInput').style.display = 'none';
+    document.getElementById('barcodeValue').value = '';
+});
+
+document.getElementById('barcodeLookupBtn').addEventListener('click', lookupBarcode);
+document.getElementById('barcodeValue').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') lookupBarcode();
+});
+
+async function searchFood() {
+    const query = document.getElementById('foodSearch').value.trim();
+    if (!query) return;
+
+    showLoading();
+    clearResults();
+
+    try {
+        const response = await fetch(`/api/nutrition/search?query=${encodeURIComponent(query)}&pageSize=10`);
+        const data = await response.json();
+
+        if (data.success && data.foods.length > 0) {
+            displaySearchResults(data.foods);
+        } else {
+            showError('No foods found. Try a different search term.');
+        }
+    } catch (error) {
+        showError('Search failed. Please try again.');
+        console.error('Search error:', error);
+    } finally {
+        hideLoading();
+    }
+}
+
+async function lookupBarcode() {
+    const barcode = document.getElementById('barcodeValue').value.trim();
+    if (!barcode) return;
+
+    showLoading();
+    clearResults();
+
+    try {
+        const response = await fetch(`/api/nutrition/barcode/${barcode}`);
+        const data = await response.json();
+
+        if (data.success) {
+            displayFoodDetails(data);
+            document.getElementById('barcodeInput').style.display = 'none';
+            document.getElementById('barcodeValue').value = '';
+        } else {
+            showError(data.error || 'Barcode not found');
+        }
+    } catch (error) {
+        showError('Barcode lookup failed. Please try again.');
+        console.error('Barcode error:', error);
+    } finally {
+        hideLoading();
+    }
+}
+
+function displaySearchResults(foods) {
+    const resultsDiv = document.getElementById('searchResults');
+    resultsDiv.innerHTML = `
+        <h6 class="mb-3">Search Results (${foods.length})</h6>
+        <div class="list-group">
+            ${foods.map(food => `
+                <a href="#" class="list-group-item list-group-item-action" onclick="selectFood(${food.fdcId}); return false;">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h6 class="mb-1">${food.description}</h6>
+                            ${food.brandOwner ? `<small class="text-muted">${food.brandOwner}</small><br>` : ''}
+                            ${food.servingSize ? `<small class="text-muted">Serving: ${food.servingSize} ${food.servingSizeUnit}</small>` : ''}
+                        </div>
+                        <div class="text-end">
+                            ${food.nutrients.calories ? `<strong class="text-primary">${Math.round(food.nutrients.calories.value)} cal</strong><br>` : ''}
+                            <small class="text-muted">${food.dataType}</small>
+                        </div>
+                    </div>
+                    ${food.nutrients.protein || food.nutrients.carbs || food.nutrients.fat ? `
+                        <div class="mt-2">
+                            ${food.nutrients.protein ? `<span class="badge bg-success me-1">P: ${food.nutrients.protein.value.toFixed(1)}g</span>` : ''}
+                            ${food.nutrients.carbs ? `<span class="badge bg-warning text-dark me-1">C: ${food.nutrients.carbs.value.toFixed(1)}g</span>` : ''}
+                            ${food.nutrients.fat ? `<span class="badge bg-danger">F: ${food.nutrients.fat.value.toFixed(1)}g</span>` : ''}
+                        </div>
+                    ` : ''}
+                </a>
+            `).join('')}
+        </div>
+    `;
+}
+
+async function selectFood(fdcId) {
+    showLoading();
+    clearDetails();
+
+    try {
+        const response = await fetch(`/api/nutrition/food/${fdcId}`);
+        const data = await response.json();
+
+        if (data.success) {
+            displayFoodDetails(data);
+            document.getElementById('searchResults').innerHTML = '';
+        } else {
+            showError('Failed to load food details');
+        }
+    } catch (error) {
+        showError('Failed to load food details');
+        console.error('Details error:', error);
+    } finally {
+        hideLoading();
+    }
+}
+
+function displayFoodDetails(food) {
+    const detailsDiv = document.getElementById('foodDetails');
+    
+    // Extract key nutrients
+    const calories = food.nutrients['Energy'] || food.nutrients['Energy (Atwater General Factors)'] || {value: 0};
+    const protein = food.nutrients['Protein'] || {value: 0};
+    const carbs = food.nutrients['Carbohydrate, by difference'] || {value: 0};
+    const fat = food.nutrients['Total lipid (fat)'] || {value: 0};
+
+    detailsDiv.innerHTML = `
+        <div class="card border-primary">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">${food.description}</h5>
+                <button type="button" class="btn-close btn-close-white" onclick="clearDetails()"></button>
+            </div>
+            <div class="card-body">
+                ${food.brandOwner ? `<p class="text-muted">${food.brandOwner}</p>` : ''}
+                ${food.servingSize ? `
+                    <div class="alert alert-info">
+                        <strong>Serving Size:</strong> ${food.servingSize} ${food.servingSizeUnit}
+                        ${food.householdServingFullText ? ` (${food.householdServingFullText})` : ''}
+                    </div>
+                ` : ''}
+
+                <!-- Macros -->
+                <div class="row g-3 mb-3">
+                    <div class="col-3">
+                        <div class="text-center p-3 bg-primary bg-opacity-10 rounded">
+                            <div class="h3 mb-0">${Math.round(calories.value)}</div>
+                            <small class="text-muted">Calories</small>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <div class="text-center p-3 bg-success bg-opacity-10 rounded">
+                            <div class="h3 mb-0">${protein.value.toFixed(1)}g</div>
+                            <small class="text-muted">Protein</small>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <div class="text-center p-3 bg-warning bg-opacity-10 rounded">
+                            <div class="h3 mb-0">${carbs.value.toFixed(1)}g</div>
+                            <small class="text-muted">Carbs</small>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <div class="text-center p-3 bg-danger bg-opacity-10 rounded">
+                            <div class="h3 mb-0">${fat.value.toFixed(1)}g</div>
+                            <small class="text-muted">Fat</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Servings Input -->
+                <div class="mb-3">
+                    <label for="servings" class="form-label">Number of Servings:</label>
+                    <input type="number" class="form-control" id="servings" value="1" min="0.1" step="0.1" style="max-width: 150px;">
+                </div>
+
+                <!-- Log Button -->
+                <button type="button" class="btn btn-success btn-lg w-100" onclick="logFood(${food.fdcId}, '${food.description.replace(/'/g, "\\'")}', ${calories.value}, ${protein.value}, ${carbs.value}, ${fat.value})">
+                    <i class="bi bi-plus-circle"></i> Log This Food
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+async function logFood(fdcId, description, calories, protein, carbs, fat) {
+    const servings = parseFloat(document.getElementById('servings').value) || 1;
+
+    const data = {
+        description: description,
+        total_calories: calories * servings,
+        total_protein_g: protein * servings,
+        total_carbs_g: carbs * servings,
+        total_fat_g: fat * servings
+    };
+
+    try {
+        const response = await fetch('/api/log-food', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            alert('✓ Food logged successfully!');
+            window.location.reload();
+        } else {
+            alert('Failed to log food: ' + result.error);
+        }
+    } catch (error) {
+        alert('Failed to log food. Please try again.');
+        console.error('Log error:', error);
+    }
+}
+
+function showLoading() {
+    document.getElementById('loadingIndicator').style.display = 'block';
+}
+
+function hideLoading() {
+    document.getElementById('loadingIndicator').style.display = 'none';
+}
+
+function clearResults() {
+    document.getElementById('searchResults').innerHTML = '';
+}
+
+function clearDetails() {
+    document.getElementById('foodDetails').innerHTML = '';
+}
+
+function showError(message) {
+    document.getElementById('searchResults').innerHTML = `
+        <div class="alert alert-warning">
+            <i class="bi bi-exclamation-triangle"></i> ${message}
+        </div>
+    `;
+}
+</script>
 {% endblock %}
