@@ -23,7 +23,7 @@
   {% set starter = [
     {"title":"BPC-157 Healing Protocol","subtitle":"Body Protection Compound-157","dose":"250–500 mcg","freq":"1–2× per day","duration":"4–6 weeks","route":"Subcutaneous","benefits":["Muscle/tendon/ligament support","Gut support","Anti-inflammatory effects","Connective tissue recovery"],"template":"bpc157"},
     {"title":"TB-500 Recovery Protocol","subtitle":"Thymosin Beta-4","dose":"2–5 mg","freq":"2× per week (loading), then 1×/week","duration":"4–6 weeks loading, then maintenance","route":"Subcutaneous","benefits":["Tissue repair support","Inflammation reduction","Flexibility/joint mobility","Recovery from injuries"],"template":"tb500"},
-    {"title":"Epitalon Sleep & Longevity Protocol","subtitle":"Epithalon (Epitalon)","dose":"5–10 mg","freq":"Daily","duration":"10–20 days (cycle)","route":"Subcutaneous","benefits":["Sleep quality support","Circadian rhythm support","General longevity interest","Cycle-based use"],"template":"epitalon"},
+    {"title":"Epitalon Sleep & Longevity Protocol","subtitle":"Epithalon (Epitalon)","dose": None,"freq":"Daily","duration":"10–20 days (cycle)","route":"Subcutaneous","benefits":["Sleep quality support","Circadian rhythm support","General longevity interest","Cycle-based use"],"template":"epitalon"},
     {"title":"GHK-Cu Skin & Repair Protocol","subtitle":"Copper Peptide (GHK-Cu)","dose":"1–3 mg","freq":"Daily","duration":"4–8 weeks","route":"Subcutaneous / topical (where applicable)","benefits":["Skin health support","Wound healing support","Hair/follicle support (reported)","General tissue support"],"template":"ghkcu"},
     {"title":"MT2 Tanning Protocol","subtitle":"Melanotan II (MT2)","dose":"100–300 mcg","freq":"Daily (titrate)","duration":"2–4 weeks (build), then maintenance","route":"Subcutaneous","benefits":["Tanning response (reported)","Sun exposure reduction goal","Titration-based approach","Maintenance dosing"],"template":"mt2"},
   ] %}
@@ -40,7 +40,7 @@
       <div class="card-body">
         <div class="mb-2"><strong>Recommended Dosing</strong></div>
         <ul class="list-unstyled mb-3">
-          <li><i class="bi bi-check-circle text-success me-2"></i><strong>Dose:</strong> {{ p.dose }}</li>
+          <li><i class="bi bi-check-circle text-success me-2"></i><strong>Dose:</strong> {{ p.dose if p.dose else "Set in your protocol" }}</li>
           <li><i class="bi bi-check-circle text-success me-2"></i><strong>Frequency:</strong> {{ p.freq }}</li>
           <li><i class="bi bi-check-circle text-success me-2"></i><strong>Duration:</strong> {{ p.duration }}</li>
           <li><i class="bi bi-check-circle text-success me-2"></i><strong>Route:</strong> {{ p.route }}</li>
