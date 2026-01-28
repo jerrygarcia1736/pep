@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block content %}
+<h1 class="mb-4"><i class="bi bi-clock-history"></i> Injection History</h1>
+
+<div class="mb-3">
+    <a href="{{ url_for('history', days=7) }}" class="btn btn-sm btn-outline-primary">7 Days</a>
+    <a href="{{ url_for('history', days=30) }}" class="btn btn-sm btn-outline-primary">30 Days</a>
+    <a href="{{ url_for('history', days=90) }}" class="btn btn-sm btn-outline-primary">90 Days</a>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">Last {{ days }} Days</h5>
+    </div>
+    <div class="card-body">
+        {% if injections %}
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Date/Time</th>
+                        <th>Peptide</th>
+                        <th>Dose</th>
+                        <th>Volume</th>
+                        <th>Site</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for inj in injections %}
+                    <tr>
+                        <td>{{ inj.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td>{{ inj.protocol.peptide.name }}</td>
+                        <td>{{ inj.dose_mcg }} mcg</td>
+                        <td>{{ inj.volume_ml }} ml</td>
+                        <td>{{ inj.injection_site or '-' }}</td>
+                        <td>{{ inj.subjective_notes[:50] if inj.subjective_notes else '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted">No injections in the last {{ days }} days.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ protocol.name }}{% endblock %}
+{% block content %}
+<div class="mb-3">
+    <a href="{{ url_for('protocols') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Back
+    </a>
+</div>
+
+<h1 class="mb-4">{{ protocol.name }}</h1>
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Protocol Details</h5>
+            </div>
+            <div class="card-body">
+                <p><strong>Peptide:</strong> {{ protocol.peptide.name }}</p>
+                <p><strong>Dose:</strong> {{ protocol.dose_mcg }} mcg</p>
+                <p><strong>Frequency:</strong> {{ protocol.frequency_per_day }}x per day</p>
+                <p><strong>Duration:</strong> {{ protocol.duration_days }} days</p>
+                <p><strong>Started:</strong> {{ protocol.start_date.strftime('%Y-%m-%d') }}</p>
+                {% if protocol.end_date %}
+                <p><strong>Ends:</strong> {{ protocol.end_date.strftime('%Y-%m-%d') }}</p>
+                {% endif %}
+                {% if protocol.goals %}
+                <p><strong>Goals:</strong> {{ protocol.goals }}</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Injection History</h5>
+            </div>
+            <div class="card-body">
+                {% if injections %}
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>Dose</th>
+                                <th>Site</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for inj in injections %}
+                            <tr>
+                                <td>{{ inj.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                                <td>{{ inj.dose_mcg }} mcg</td>
+                                <td>{{ inj.injection_site or '-' }}</td>
+                                <td>{{ inj.subjective_notes[:50] if inj.subjective_notes else '-' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted">No injections logged yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-body">
+                <h5>Quick Actions</h5>
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('log_injection') }}" class="btn btn-success">
+                        <i class="bi bi-plus-circle"></i> Log Injection
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
