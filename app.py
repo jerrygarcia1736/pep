@@ -10,10 +10,36 @@ import os
 from werkzeug.security import generate_password_hash, check_password_hash
 import openai
 
-from models import get_session, Base, create_engine
+from models import get_session, Base, create_engine, Peptide
 from database import PeptideDB
 from calculator import PeptideCalculator
 from config import Config
+
+from sqlalchemy import text
+
+def ensure_peptides_image_filename_column(engine):
+    """Ensure peptides.image_filename exists (Postgres/SQLite). Safe to call on every startup."""
+    try:
+        dialect = engine.dialect.name.lower()
+        if dialect.startswith("postgres"):
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE peptides ADD COLUMN IF NOT EXISTS image_filename VARCHAR(255);"))
+        elif dialect.startswith("sqlite"):
+            # SQLite doesn't support IF NOT EXISTS for ADD COLUMN in older versions; check first.
+            with engine.begin() as conn:
+                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(peptides);")).fetchall()]
+                if "image_filename" not in cols:
+                    conn.execute(text("ALTER TABLE peptides ADD COLUMN image_filename VARCHAR(255);"))
+        else:
+            # Generic: attempt and ignore if it fails
+            with engine.begin() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE peptides ADD COLUMN image_filename VARCHAR(255);"))
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"Warning: could not ensure image_filename column: {e}")
+
 
 # Import models for user management
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
