@@ -15,6 +15,8 @@ Also keeps:
 - users.tier startup migration (Postgres/SQLite)
 - Jinja helpers: current_user, has_endpoint(), tier_at_least()
 - dashboard context: stats/protocols/recent_injections (safe defaults)
+
+UPDATED: Added USDA Nutrition API integration
 """
 
 from __future__ import annotations
@@ -33,6 +35,9 @@ from jinja2 import TemplateNotFound
 from sqlalchemy import Column, Integer, String, DateTime, Float, text
 from config import Config
 from models import get_session, create_engine, Base as ModelBase
+
+# Import nutrition API
+from nutrition_api import register_nutrition_routes
 
 # -----------------------------------------------------------------------------
 # Flask app
@@ -102,6 +107,11 @@ def ensure_users_tier_column(engine) -> None:
 
 ModelBase.metadata.create_all(engine)
 ensure_users_tier_column(engine)
+
+# -----------------------------------------------------------------------------
+# Register USDA Nutrition API Routes
+# -----------------------------------------------------------------------------
+register_nutrition_routes(app)
 
 # -----------------------------------------------------------------------------
 # Tier helpers
@@ -204,66 +214,70 @@ def _compute_dashboard_context() -> Tuple[Dict[str, Any], List[Any], List[Any]]:
 def index():
     if "user_id" in session:
         return redirect(url_for("dashboard"))
-    return render_if_exists("index.html", fallback_endpoint="login")
+    return render_if_exists("index.html", fallback_endpoint="register")
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
-        email = (request.form.get("email") or "").strip().lower()
-        password = request.form.get("password") or ""
-        confirm = request.form.get("confirm_password") or ""
+        email = (request.form.get("email") or "").strip()
+        password = (request.form.get("password") or "").strip()
 
         if not username or not email or not password:
-            flash("All fields are required.", "danger")
-            return redirect(url_for("register"))
-        if password != confirm:
-            flash("Passwords do not match.", "danger")
-            return redirect(url_for("register"))
+            flash("All fields are required.", "error")
+            return render_if_exists("register.html", fallback_endpoint="index")
 
         db = get_session(db_url)
         try:
-            existing = db.query(User).filter((User.username == username) | (User.email == email)).first()
+            existing = db.query(User).filter(
+                (User.username == username) | (User.email == email)
+            ).first()
             if existing:
-                flash("Username or email already exists.", "danger")
-                return redirect(url_for("register"))
+                flash("Username or email already exists.", "error")
+                return render_if_exists("register.html", fallback_endpoint="index")
 
             user = User(username=username, email=email, tier="free")
             user.set_password(password)
             db.add(user)
             db.commit()
-            flash("Registration successful! Please log in.", "success")
-            return redirect(url_for("login"))
+            session["user_id"] = user.id
+            flash("Welcome! You're all set.", "success")
+            return redirect(url_for("dashboard"))
         finally:
             db.close()
 
-    return render_if_exists("register.html", fallback_endpoint="login")
+    return render_if_exists("register.html", fallback_endpoint="index")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
-        password = request.form.get("password") or ""
+        password = (request.form.get("password") or "").strip()
+
+        if not username or not password:
+            flash("Username and password required.", "error")
+            return render_if_exists("login.html", fallback_endpoint="index")
 
         db = get_session(db_url)
         try:
             user = db.query(User).filter_by(username=username).first()
-            if user and user.check_password(password):
-                session["user_id"] = user.id
-                flash("Logged in successfully.", "success")
-                return redirect(url_for("dashboard"))
+            if not user or not user.check_password(password):
+                flash("Invalid credentials.", "error")
+                return render_if_exists("login.html", fallback_endpoint="index")
+
+            session["user_id"] = user.id
+            flash("Logged in!", "success")
+            return redirect(url_for("dashboard"))
         finally:
             db.close()
-
-        flash("Invalid credentials.", "danger")
 
     return render_if_exists("login.html", fallback_endpoint="index")
 
 @app.route("/logout")
 def logout():
     session.clear()
-    flash("Logged out.", "info")
-    return redirect(url_for("login"))
+    flash("You've been logged out.", "info")
+    return redirect(url_for("index"))
 
 @app.route("/dashboard")
 @login_required
@@ -271,13 +285,14 @@ def dashboard():
     stats, protocols, recent_injections = _compute_dashboard_context()
     return render_if_exists(
         "dashboard.html",
+        fallback_endpoint="index",
         stats=stats,
         protocols=protocols,
-        recent_injections=(recent_injections[:5] if isinstance(recent_injections, list) else recent_injections),
+        recent_injections=recent_injections,
     )
 
 # -----------------------------------------------------------------------------
-# Routes referenced by dashboard.html (stubs)
+# Stub endpoints to prevent BuildError
 # -----------------------------------------------------------------------------
 @app.route("/log-injection", methods=["GET", "POST"])
 @login_required
@@ -310,7 +325,7 @@ def protocol_detail(protocol_id: int):
     return render_if_exists("protocol_detail.html", fallback_endpoint="protocols", protocol_id=protocol_id)
 
 # -----------------------------------------------------------------------------
-# Nutrition tracking with Calorie Ninja API
+# Nutrition tracking with Calorie Ninja API (LEGACY - Keep for backward compatibility)
 # -----------------------------------------------------------------------------
 CALORIE_NINJA_API_KEY = os.environ.get("CALORIE_NINJA_API_KEY")
 
@@ -459,6 +474,13 @@ def peptides():
 @app.route("/calculator")
 @login_required
 def calculator():
+    """Legacy route - redirects to peptide-calculator"""
+    return redirect(url_for("peptide_calculator"))
+
+@app.route("/peptide-calculator")
+@login_required
+def peptide_calculator():
+    """Peptide Calculator - NEW route name"""
     return render_if_exists("calculator.html", fallback_endpoint="dashboard")
 
 @app.route("/protocols")
@@ -485,3 +507,11 @@ def coaching():
 @login_required
 def chat():
     return render_if_exists("chat.html", fallback_endpoint="dashboard")
+
+# -----------------------------------------------------------------------------
+# Run
+# -----------------------------------------------------------------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    debug = os.environ.get("FLASK_ENV") == "development"
+    app.run(host="0.0.0.0", port=port, debug=debug)
