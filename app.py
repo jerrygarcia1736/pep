@@ -1,125 +1,87 @@
 """
 Peptide Tracker Web Application
-Flask web interface with user authentication + dosing calculator + chat.
+Flask web interface with user authentication
 """
 
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
-
 from werkzeug.security import generate_password_hash, check_password_hash
+import openai
 
-from sqlalchemy import Column, Integer, String, DateTime, create_engine
-from models import get_session, Peptide
-from models import Base as ModelBase
-
+from models import get_session, Base, create_engine
 from database import PeptideDB
 from calculator import PeptideCalculator
 from config import Config
 
-# OpenAI (openai>=1.0.0)
-from openai import OpenAI
+# Import models for user management
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from models import Base as ModelBase
 
-
-# -------------------- User model --------------------
+# User model
 class User(ModelBase):
     __tablename__ = 'users'
-
+    
     id = Column(Integer, primary_key=True)
     username = Column(String(80), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-
-    def set_password(self, password: str) -> None:
+    
+    def set_password(self, password):
         self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password: str) -> bool:
+    
+    def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+    
+    def __repr__(self):
+        return f'<User {self.username}>'
 
 
-# -------------------- App setup --------------------
-
-
-# -------------------- Schema helpers --------------------
-def ensure_peptides_image_filename_column(engine):
-    """
-    Adds peptides.image_filename if missing.
-    Works for SQLite and Postgres (best-effort).
-    """
-    try:
-        with engine.begin() as conn:
-            # SQLite: PRAGMA table_info
-            try:
-                rows = conn.exec_driver_sql("PRAGMA table_info(peptides);").fetchall()
-                cols = {r[1] for r in rows}  # name is index 1
-                if "image_filename" in cols:
-                    return
-            except Exception:
-                pass  # not SQLite
-
-            # Postgres: information_schema check (safe even if not PG; may fail)
-            try:
-                exists = conn.exec_driver_sql("""
-                    SELECT 1
-                    FROM information_schema.columns
-                    WHERE table_name='peptides' AND column_name='image_filename'
-                    LIMIT 1;
-                """).fetchone()
-                if exists:
-                    return
-            except Exception:
-                pass
-
-            # Add column (if already exists, will raise -> ignored)
-            try:
-                conn.exec_driver_sql("ALTER TABLE peptides ADD COLUMN image_filename VARCHAR(255);")
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"Schema check failed (non-fatal): {e}")
-
+# Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
+# OpenAI setup
+openai.api_key = Config.OPENAI_API_KEY
+
+# Database setup - use DATABASE_URL from Config (works with both PostgreSQL and SQLite)
 db_url = Config.DATABASE_URL
-print(f"Using database: {db_url[:25]}...")
+print(f"Using database: {db_url[:20]}...")  # Print first 20 chars for debugging
 
 engine = create_engine(db_url)
+ensure_peptides_image_filename_column(engine)
 ModelBase.metadata.create_all(engine)
 
-# OpenAI client (only if key exists)
-openai_client = OpenAI(api_key=Config.OPENAI_API_KEY) if Config.OPENAI_API_KEY else None
+# Initialize database with peptides if empty (for first deploy)
+def init_database():
+    """Initialize database with peptides on first run"""
+    from seed_data import seed_common_peptides
+    session = get_session(db_url)
+    from database import PeptideDB
+    db = PeptideDB(session)
+    
+    # Check if database is empty
+    peptide_count = len(db.list_peptides())
+    if peptide_count == 0:
+        print("Database is empty, seeding with common peptides...")
+        seed_common_peptides(session)
+        print(f"Seeded {len(db.list_peptides())} peptides")
+    else:
+        print(f"Database already has {peptide_count} peptides")
+    
+    session.close()
+
+# Initialize on startup
+try:
+    init_database()
+except Exception as e:
+    print(f"Warning: Could not initialize database: {e}")
 
 
-# Optional: seed on deploy when RUN_SEED=true (idempotent)
-def maybe_seed_database():
-    if os.getenv("RUN_SEED", "").lower() != "true":
-        return
-    try:
-        from seed_data import seed_common_peptides
-        print("RUN_SEED=true -> seeding peptides (idempotent)...")
-        s = get_session(db_url)
-        seed_common_peptides(s)
-        s.close()
-        print("Seeding finished.")
-    except Exception as e:
-        print(f"Warning: seeding failed: {e}")
-
-maybe_seed_database()
-
-
-
-def slugify_name(name: str) -> str:
-    """Create a filesystem-friendly slug for images, e.g. 'BPC-157' -> 'bpc-157'."""
-    import re
-    s = (name or "").strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "-", s)
-    return s.strip("-")
-
-
-# -------------------- Auth helpers --------------------
+# Login decorator
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -130,9 +92,21 @@ def login_required(f):
     return decorated_function
 
 
-# -------------------- Routes --------------------
+# Helper function to get current user
+def get_current_user():
+    if 'user_id' in session:
+        db_session = get_session(db_url)
+        user = db_session.query(User).filter_by(id=session['user_id']).first()
+        db_session.close()
+        return user
+    return None
+
+
+# ==================== AUTHENTICATION ROUTES ====================
+
 @app.route('/')
 def index():
+    """Landing page"""
     if 'user_id' in session:
         return redirect(url_for('dashboard'))
     return render_template('index.html')
@@ -140,116 +114,149 @@ def index():
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
+    """User registration"""
     if request.method == 'POST':
-        username = (request.form.get('username') or '').strip()
-        email = (request.form.get('email') or '').strip()
-        password = request.form.get('password') or ''
-        confirm_password = request.form.get('confirm_password') or ''
-
+        username = request.form.get('username')
+        email = request.form.get('email')
+        password = request.form.get('password')
+        confirm_password = request.form.get('confirm_password')
+        
+        # Validation
         if not username or not email or not password:
             flash('All fields are required.', 'danger')
             return redirect(url_for('register'))
-
+        
         if password != confirm_password:
             flash('Passwords do not match.', 'danger')
             return redirect(url_for('register'))
-
+        
         if len(password) < 6:
             flash('Password must be at least 6 characters.', 'danger')
             return redirect(url_for('register'))
-
+        
+        # Create user
         db_session = get_session(db_url)
+        
+        # Check if user exists
         existing_user = db_session.query(User).filter(
             (User.username == username) | (User.email == email)
         ).first()
-
+        
         if existing_user:
             flash('Username or email already exists.', 'danger')
             db_session.close()
             return redirect(url_for('register'))
-
+        
+        # Create new user
         user = User(username=username, email=email)
         user.set_password(password)
         db_session.add(user)
         db_session.commit()
-
+        
         flash('Registration successful! Please log in.', 'success')
         db_session.close()
         return redirect(url_for('login'))
-
+    
     return render_template('register.html')
 
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    """User login"""
     if request.method == 'POST':
-        username = (request.form.get('username') or '').strip()
-        password = request.form.get('password') or ''
-
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
         db_session = get_session(db_url)
         user = db_session.query(User).filter_by(username=username).first()
-
+        
         if user and user.check_password(password):
             session['user_id'] = user.id
             session['username'] = user.username
             flash(f'Welcome back, {user.username}!', 'success')
             db_session.close()
             return redirect(url_for('dashboard'))
-
+        
         flash('Invalid username or password.', 'danger')
         db_session.close()
-
+    
     return render_template('login.html')
 
 
 @app.route('/logout')
 def logout():
+    """User logout"""
     session.clear()
     flash('You have been logged out.', 'info')
     return redirect(url_for('index'))
 
 
+# ==================== MAIN APPLICATION ROUTES ====================
+
 @app.route('/dashboard')
 @login_required
 def dashboard():
+    """Main dashboard"""
     db_session = get_session(db_url)
     db = PeptideDB(db_session)
-
+    
+    # Get stats
     active_protocols = db.list_active_protocols()
     recent_injections = db.get_recent_injections(days=7)
     active_vials = db.list_active_vials()
-
+    
     stats = {
         'active_protocols': len(active_protocols),
         'active_vials': len(active_vials),
         'injections_this_week': len(recent_injections),
         'total_peptides': len(db.list_peptides())
     }
-
+    
     db_session.close()
-
-    return render_template(
-        'dashboard.html',
-        stats=stats,
-        protocols=active_protocols,
-        recent_injections=recent_injections[:5]
-    )
+    
+    return render_template('dashboard.html', 
+                         stats=stats, 
+                         protocols=active_protocols,
+                         recent_injections=recent_injections[:5])
 
 
 @app.route('/peptides')
 @login_required
 def peptides():
+    """List all peptides"""
     db_session = get_session(db_url)
     db = PeptideDB(db_session)
+    
     all_peptides = db.list_peptides()
     db_session.close()
+    
     return render_template('peptides.html', peptides=all_peptides)
+
+
+@app.route('/peptides/<int:peptide_id>')
+@login_required
+def peptide_detail(peptide_id):
+    """View peptide details"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    peptide = db.get_peptide(peptide_id)
+    if not peptide:
+        flash('Peptide not found.', 'danger')
+        return redirect(url_for('peptides'))
+    
+    research = db.get_peptide_research(peptide_id)
+    
+    db_session.close()
+    return render_template('peptide_detail.html', peptide=peptide, research=research)
 
 
 @app.route('/calculator', methods=['GET', 'POST'])
 @login_required
 def calculator():
+    """Reconstitution calculator"""
     result = None
+    
     if request.method == 'POST':
         try:
             peptide_name = request.form.get('peptide_name')
@@ -257,527 +264,331 @@ def calculator():
             ml_water = float(request.form.get('ml_water'))
             dose_mcg = float(request.form.get('dose_mcg'))
             doses_per_day = int(request.form.get('doses_per_day'))
-
+            
             result = PeptideCalculator.full_reconstitution_report(
                 peptide_name, mg_amount, ml_water, dose_mcg, doses_per_day
             )
         except (ValueError, TypeError) as e:
             flash(f'Invalid input: {e}', 'danger')
-
+    
+    # Get peptide list for dropdown
     db_session = get_session(db_url)
     db = PeptideDB(db_session)
-    peptides_list = db.list_peptides()
+    peptides = db.list_peptides()
     db_session.close()
+    
+    return render_template('calculator.html', result=result, peptides=peptides)
 
-    return render_template('calculator.html', result=result, peptides=peptides_list)
 
-
-
-# -------------------- Vials --------------------
 @app.route('/vials')
 @login_required
 def vials():
+    """List vials"""
     db_session = get_session(db_url)
     db = PeptideDB(db_session)
+    
     active_vials = db.list_active_vials()
-    peptides_list = db.list_peptides()
     db_session.close()
-    return render_template('vials.html', vials=active_vials, peptides=peptides_list)
+    
+    return render_template('vials.html', vials=active_vials)
 
 
 @app.route('/vials/add', methods=['GET', 'POST'])
 @login_required
 def add_vial():
-    db_session = get_session(db_url)
-    db = PeptideDB(db_session)
-    peptides_list = db.list_peptides()
-
+    """Add new vial"""
     if request.method == 'POST':
         try:
             peptide_id = int(request.form.get('peptide_id'))
             mg_amount = float(request.form.get('mg_amount'))
-            bacteriostatic_water_ml = request.form.get('bacteriostatic_water_ml')
-            bacteriostatic_water_ml = float(bacteriostatic_water_ml) if bacteriostatic_water_ml else None
-
-            lot_number = (request.form.get('lot_number') or '').strip() or None
-            vendor = (request.form.get('vendor') or '').strip() or None
-            cost = request.form.get('cost')
-            cost = float(cost) if cost else None
-            notes = (request.form.get('notes') or '').strip() or None
-
-            db.add_vial(
-                peptide_id=peptide_id,
-                mg_amount=mg_amount,
-                bacteriostatic_water_ml=bacteriostatic_water_ml,
-                lot_number=lot_number,
-                vendor=vendor,
-                cost=cost,
-                notes=notes,
-            )
-            flash('Vial added successfully.', 'success')
+            vendor = request.form.get('vendor') or None
+            lot_number = request.form.get('lot_number') or None
+            
+            reconstitute = request.form.get('reconstitute') == 'yes'
+            
+            db_session = get_session(db_url)
+            db = PeptideDB(db_session)
+            
+            if reconstitute:
+                ml_water = float(request.form.get('ml_water'))
+                vial = db.add_vial(
+                    peptide_id=peptide_id,
+                    mg_amount=mg_amount,
+                    bacteriostatic_water_ml=ml_water,
+                    reconstitution_date=datetime.now(),
+                    vendor=vendor,
+                    lot_number=lot_number
+                )
+            else:
+                vial = db.add_vial(
+                    peptide_id=peptide_id,
+                    mg_amount=mg_amount,
+                    vendor=vendor,
+                    lot_number=lot_number
+                )
+            
             db_session.close()
+            flash(f'Vial added successfully! (Concentration: {vial.concentration_mcg_per_ml} mcg/ml)', 'success')
             return redirect(url_for('vials'))
-        except Exception as e:
+            
+        except (ValueError, TypeError) as e:
             flash(f'Error adding vial: {e}', 'danger')
-
+    
+    # Get peptides for dropdown
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    peptides = db.list_peptides()
     db_session.close()
-    return render_template('add_vial.html', peptides=peptides_list)
+    
+    return render_template('add_vial.html', peptides=peptides)
 
 
-# -------------------- Protocols --------------------
 @app.route('/protocols')
 @login_required
 def protocols():
+    """List protocols"""
     db_session = get_session(db_url)
     db = PeptideDB(db_session)
+    
     active_protocols = db.list_active_protocols()
-    peptides_list = db.list_peptides()
     db_session.close()
-    return render_template('protocols.html', protocols=active_protocols, peptides=peptides_list)
+    
+    return render_template('protocols.html', protocols=active_protocols)
 
 
 @app.route('/protocols/add', methods=['GET', 'POST'])
 @login_required
 def add_protocol():
-    db_session = get_session(db_url)
-    db = PeptideDB(db_session)
-    peptides_list = db.list_peptides()
-
+    """Create new protocol"""
     if request.method == 'POST':
         try:
             peptide_id = int(request.form.get('peptide_id'))
-            name = (request.form.get('name') or '').strip() or 'Protocol'
+            name = request.form.get('name')
             dose_mcg = float(request.form.get('dose_mcg'))
-            frequency_per_day = int(request.form.get('frequency_per_day'))
-            description = (request.form.get('description') or '').strip() or None
-            duration_days = request.form.get('duration_days')
-            duration_days = int(duration_days) if duration_days else None
-            goals = (request.form.get('goals') or '').strip() or None
-            notes = (request.form.get('notes') or '').strip() or None
-
-            db.create_protocol(
+            frequency = int(request.form.get('frequency_per_day'))
+            duration = int(request.form.get('duration_days'))
+            goals = request.form.get('goals') or None
+            
+            db_session = get_session(db_url)
+            db = PeptideDB(db_session)
+            
+            protocol = db.create_protocol(
                 peptide_id=peptide_id,
                 name=name,
                 dose_mcg=dose_mcg,
-                frequency_per_day=frequency_per_day,
-                description=description,
-                duration_days=duration_days,
+                frequency_per_day=frequency,
+                duration_days=duration,
                 goals=goals,
-                notes=notes,
+                start_date=datetime.now()
             )
-            flash('Protocol created successfully.', 'success')
+            
             db_session.close()
+            flash(f'Protocol "{name}" created successfully!', 'success')
             return redirect(url_for('protocols'))
-        except Exception as e:
+            
+        except (ValueError, TypeError) as e:
             flash(f'Error creating protocol: {e}', 'danger')
-
-    db_session.close()
-    return render_template('add_protocol.html', peptides=peptides_list)
-
-
-@app.route('/protocol/<int:protocol_id>')
-@login_required
-def protocol_detail(protocol_id: int):
+    
+    # Get peptides for dropdown
     db_session = get_session(db_url)
     db = PeptideDB(db_session)
+    peptides = db.list_peptides()
+    db_session.close()
+    
+    return render_template('add_protocol.html', peptides=peptides)
+
+
+@app.route('/protocols/<int:protocol_id>')
+@login_required
+def protocol_detail(protocol_id):
+    """View protocol details and history"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
     protocol = db.get_protocol(protocol_id)
-    db_session.close()
     if not protocol:
-        flash('Protocol not found.', 'warning')
+        flash('Protocol not found.', 'danger')
         return redirect(url_for('protocols'))
-    return render_template('protocol_detail.html', protocol=protocol)
-
-
-# -------------------- History / Injections --------------------
-@app.route('/history')
-@login_required
-def history():
-    db_session = get_session(db_url)
-    db = PeptideDB(db_session)
-    injections = db.get_recent_injections(days=30)
-    peptides_list = db.list_peptides()
+    
+    injections = db.get_protocol_injections(protocol_id, limit=50)
+    
     db_session.close()
-    return render_template('history.html', injections=injections, peptides=peptides_list)
+    return render_template('protocol_detail.html', protocol=protocol, injections=injections)
 
 
 @app.route('/injections/log', methods=['GET', 'POST'])
 @login_required
 def log_injection():
-    db_session = get_session(db_url)
-    db = PeptideDB(db_session)
-    peptides_list = db.list_peptides()
-    active_protocols = db.list_active_protocols()
-    active_vials = db.list_active_vials()
-
+    """Log an injection"""
     if request.method == 'POST':
         try:
-            peptide_id = int(request.form.get('peptide_id'))
+            protocol_id = int(request.form.get('protocol_id'))
+            vial_id = int(request.form.get('vial_id'))
             dose_mcg = float(request.form.get('dose_mcg'))
-            protocol_id = request.form.get('protocol_id')
-            protocol_id = int(protocol_id) if protocol_id else None
-            vial_id = request.form.get('vial_id')
-            vial_id = int(vial_id) if vial_id else None
-            notes = (request.form.get('notes') or '').strip() or None
-
-            db.log_injection(
-                peptide_id=peptide_id,
-                dose_mcg=dose_mcg,
+            volume_ml = float(request.form.get('volume_ml'))
+            site = request.form.get('injection_site') or None
+            notes = request.form.get('subjective_notes') or None
+            
+            db_session = get_session(db_url)
+            db = PeptideDB(db_session)
+            
+            injection = db.log_injection(
                 protocol_id=protocol_id,
                 vial_id=vial_id,
-                notes=notes,
+                dose_mcg=dose_mcg,
+                volume_ml=volume_ml,
+                injection_site=site,
+                subjective_notes=notes
             )
-            flash('Injection logged.', 'success')
+            
             db_session.close()
-            return redirect(url_for('history'))
-        except Exception as e:
+            flash('Injection logged successfully!', 'success')
+            return redirect(url_for('dashboard'))
+            
+        except (ValueError, TypeError) as e:
             flash(f'Error logging injection: {e}', 'danger')
-
-    db_session.close()
-    return render_template(
-        'log_injection.html',
-        peptides=peptides_list,
-        protocols=active_protocols,
-        vials=active_vials
-    )
-
-
-@app.route('/peptide/<int:peptide_id>')
-@login_required
-def peptide_detail(peptide_id: int):
+    
+    # Get active protocols and vials
     db_session = get_session(db_url)
     db = PeptideDB(db_session)
-    peptide = db.get_peptide(peptide_id)
+    
+    protocols = db.list_active_protocols()
+    vials = db.list_active_vials()
+    
     db_session.close()
-    if not peptide:
-        flash('Peptide not found.', 'warning')
-        return redirect(url_for('peptides'))
-    return render_template('peptide_detail.html', peptide=peptide)
+    
+    return render_template('log_injection.html', protocols=protocols, vials=vials)
 
 
-
-
-
-# -------------------- Recommendations (Age slider + Goals toggles) --------------------
-def score_peptide_for_age(peptide, age: int, goals: list[str] | None = None) -> tuple[int, str]:
-    """
-    Returns (score, reason). Heuristic UX ranking only (not medical advice).
-    Uses text fields already in the database to guess relevance.
-    goals: optional list like ["fat_loss","recovery","skin","cognition","longevity"]
-    """
-    age = max(13, min(99, int(age or 35)))
-    goals = [g.strip().lower() for g in (goals or []) if g and isinstance(g, str)]
-
-    text = " ".join([
-        (getattr(peptide, "name", "") or ""),
-        (getattr(peptide, "common_name", "") or ""),
-        (getattr(peptide, "primary_benefits", "") or ""),
-        (getattr(peptide, "notes", "") or ""),
-    ]).lower()
-
-    def has(*kw):
-        return any(k in text for k in kw)
-
-    score = 0
-    reasons = []
-
-    # Keyword packs per goal (tunable)
-    GOAL_KW = {
-        "fat_loss": ("weight","fat","appetite","glucose","metabolic","insulin","lean"),
-        "recovery": ("recovery","repair","injury","inflammation","joint","tendon","ligament","muscle"),
-        "skin": ("skin","collagen","hair","wrinkle","texture","dermal"),
-        "cognition": ("cognitive","focus","memory","brain","neuro","mood"),
-        "longevity": ("longevity","aging","mitochond","oxidative","energy","senescence"),
-    }
-
-    # If user selected goals, boost matching text heavily (and explain why)
-    for g in goals:
-        kws = GOAL_KW.get(g)
-        if not kws:
-            continue
-        if has(*kws):
-            score += 6
-            label = {
-                "fat_loss":"Fat loss / metabolic",
-                "recovery":"Recovery",
-                "skin":"Skin",
-                "cognition":"Cognition",
-                "longevity":"Longevity / energy",
-            }.get(g, g)
-            reasons.append(label)
-
-    # Age buckets (light weighting so goals drive the result if selected)
-    if age < 30:
-        if has("recovery", "repair", "injury", "tendon", "ligament", "muscle"):
-            score += 3; reasons.append("Recovery / training support")
-        if has("skin", "collagen", "hair"):
-            score += 2; reasons.append("Skin / appearance support")
-    elif age < 45:
-        if has("recovery", "repair", "injury", "inflammation"):
-            score += 2; reasons.append("Recovery / inflammation")
-        if has("sleep", "stress"):
-            score += 1; reasons.append("Sleep / stress")
-        if has("skin", "collagen"):
-            score += 2; reasons.append("Skin / collagen")
-    elif age < 60:
-        if has("metabolic", "glucose", "weight", "appetite", "fat"):
-            score += 3; reasons.append("Metabolic / body composition")
-        if has("recovery", "inflammation", "joint"):
-            score += 2; reasons.append("Recovery / inflammation")
-        if has("cognitive", "focus", "memory"):
-            score += 1; reasons.append("Cognitive support")
-    else:
-        if has("mitochond", "energy", "longevity", "aging", "oxidative"):
-            score += 3; reasons.append("Mitochondrial / longevity")
-        if has("cognitive", "memory", "neuro"):
-            score += 2; reasons.append("Cognitive support")
-        if has("metabolic", "glucose", "weight"):
-            score += 2; reasons.append("Metabolic support")
-
-    # General boosts
-    if (getattr(peptide, "research_links", "") or "").strip():
-        score += 2; reasons.append("Has research links")
-    if (getattr(peptide, "contraindications", "") or "").strip():
-        score += 1  # informational completeness
-
-    # Keep reasons concise + unique
-    reason = ", ".join(dict.fromkeys(reasons))[:180] if reasons else "General info available"
-    return score, reason
-
-
-@app.route("/api/recommendations")
+@app.route('/history')
 @login_required
-def api_recommendations():
-    # Goals toggles: fat_loss,recovery,skin,cognition,longevity
-    age_raw = request.args.get("age", "35")
-    goals_raw = request.args.get("goals", "")
-    goals = [g for g in goals_raw.split(",") if g.strip()]
-    try:
-        age = int(age_raw)
-    except Exception:
-        age = 35
-
+def history():
+    """View injection history"""
+    days = request.args.get('days', 30, type=int)
+    
     db_session = get_session(db_url)
-    peptides_all = db_session.query(Peptide).all()
+    db = PeptideDB(db_session)
+    
+    injections = db.get_recent_injections(days=days)
+    
     db_session.close()
-
-    ranked = []
-    for p in peptides_all:
-        score, reason = score_peptide_for_age(p, age, goals)
-        slug = slugify_name(p.name)
-        ranked.append({
-            "id": p.id,
-            "name": p.name,
-            "common_name": getattr(p, "common_name", "") or "",
-            "primary_benefits": (getattr(p, "primary_benefits", "") or "")[:220],
-            "score": score,
-            "reason": reason,
-            "image_url": url_for("static", filename=f"img/peptides/{(getattr(p, "image_filename", None) or (slug + ".png"))}"),
-        })
-
-    ranked.sort(key=lambda x: (x["score"], x["name"]), reverse=True)
-    # Return top 6
-    return jsonify({"age": age, "goals": goals, "items": ranked[:6]})
+    
+    return render_template('history.html', injections=injections, days=days)
 
 
-# -------------------- Compare --------------------
-def compute_compare_scores(peptide):
-    """
-    Lightweight 1–5 scores for visuals (not medical advice; purely UX).
-    These are heuristic and based only on fields present in your database.
-    """
-    # Convenience: lower frequency and oral route are generally "easier"
-    freq = getattr(peptide, "frequency_per_day", None) or 0
-    route = getattr(peptide, "primary_route", None)
-    storage = getattr(peptide, "storage_method", None)
-    has_links = bool((getattr(peptide, "research_links", None) or "").strip())
-    has_notes = bool((getattr(peptide, "notes", None) or "").strip())
+# ==================== AI CHAT ROUTES ====================
 
-    # Evidence score
-    evidence = 2
-    if has_links:
-        evidence += 2
-    if has_notes:
-        evidence += 1
-    evidence = max(1, min(5, evidence))
-
-    # Convenience score (higher is easier)
-    if freq <= 0:
-        convenience = 3
-    elif freq == 1:
-        convenience = 5
-    elif freq == 2:
-        convenience = 4
-    elif freq == 3:
-        convenience = 3
-    else:
-        convenience = 2
-
-    if route is not None and getattr(route, "value", "") == "oral":
-        convenience = min(5, convenience + 1)
-    if storage is not None and getattr(storage, "value", "") == "freezer":
-        convenience = max(1, convenience - 1)
-
-    # Complexity score (higher = more complex)
-    complexity = 3
-    if freq >= 3:
-        complexity += 1
-    if storage is not None and getattr(storage, "value", "") == "freezer":
-        complexity += 1
-    if route is not None and getattr(route, "value", "") in ("intramuscular",):
-        complexity += 1
-    complexity = max(1, min(5, complexity))
-
-    # Cost score is unknown; use neutral with slight penalty if frequent
-    cost = 3
-    if freq >= 3:
-        cost = 4
-    cost = max(1, min(5, cost))
-
-    return {
-        "evidence": evidence,
-        "convenience": convenience,
-        "complexity": complexity,
-        "cost": cost,
-    }
-
-
-@app.route('/compare')
-@login_required
-def compare():
-    """
-    Compare 2–4 peptides side-by-side.
-    Example: /compare?ids=1,2,3
-    """
-    ids_raw = (request.args.get('ids') or '').strip()
-    if not ids_raw:
-        flash('Select 2–4 peptides to compare.', 'warning')
-        return redirect(url_for('peptides'))
-
-    try:
-        ids = [int(x) for x in ids_raw.split(',') if x.strip().isdigit()]
-    except Exception:
-        ids = []
-
-    # Keep it clean: 2–4 items
-    ids = ids[:4]
-    if len(ids) < 2:
-        flash('Select at least 2 peptides to compare.', 'warning')
-        return redirect(url_for('peptides'))
-
-    db_session = get_session(db_url)
-    peptides_selected = db_session.query(Peptide).filter(Peptide.id.in_(ids)).all()
-    db_session.close()
-
-    # Preserve user selection order
-    by_id = {p.id: p for p in peptides_selected}
-    peptides_selected = [by_id[i] for i in ids if i in by_id]
-
-    compare_items = []
-    chart_series = []
-
-    for p in peptides_selected:
-        scores = compute_compare_scores(p)
-        slug = slugify_name(p.name)
-        image_url = url_for('static', filename=f'img/peptides/{slug}.png')
-        compare_items.append({
-            "id": p.id,
-            "name": p.name,
-            "common_name": getattr(p, "common_name", "") or "",
-            "primary_benefits": getattr(p, "primary_benefits", "") or "",
-            "primary_route": getattr(p.primary_route, "value", "") if getattr(p, "primary_route", None) else "",
-            "storage_method": getattr(p.storage_method, "value", "") if getattr(p, "storage_method", None) else "",
-            "frequency_per_day": getattr(p, "frequency_per_day", None),
-            "half_life_hours": getattr(p, "half_life_hours", None),
-            "typical_dose_min": getattr(p, "typical_dose_min", None),
-            "typical_dose_max": getattr(p, "typical_dose_max", None),
-            "notes": getattr(p, "notes", "") or "",
-            "research_links": getattr(p, "research_links", "") or "",
-            "scores": scores,
-            "image_url": image_url,
-        })
-        chart_series.append({
-            "label": p.name,
-            "data": [scores["evidence"], scores["convenience"], scores["cost"], scores["complexity"]],
-        })
-
-    # These labels match the order above
-    chart_labels = ["Evidence", "Convenience", "Cost", "Complexity"]
-
-    return render_template(
-        'compare.html',
-        items=compare_items,
-        chart_labels=chart_labels,
-        chart_series=chart_series,
-    )
-
-
-# -------------------- Chat --------------------
 @app.route('/chat')
 @login_required
 def chat():
+    """AI Chat Assistant page"""
     return render_template('chat.html')
 
 
 @app.route('/api/chat', methods=['POST'])
 @login_required
 def api_chat():
-    if openai_client is None:
-        return jsonify({
-            "success": False,
-            "error": "Chat is not configured. Set OPENAI_API_KEY in Render environment variables."
-        }), 500
-
-    data = request.get_json() or {}
-    user_message = (data.get('message') or '').strip()
-    if not user_message:
-        return jsonify({'success': False, 'error': 'No message provided'}), 400
-
-    db_session = get_session(db_url)
-    db = PeptideDB(db_session)
-    protocols = db.list_active_protocols()
-    all_peptides = db.list_peptides()
-    db_session.close()
-
-    protocol_summary = "No active protocols."
-    if protocols:
-        protocol_summary = "; ".join(
-            [f"{p.peptide.name}: {p.dose_mcg}mcg, {p.frequency_per_day}x/day" for p in protocols[:10]]
-        )
-
-    system_prompt = f"""
-You are a helpful assistant inside a peptide tracking app.
-
-Rules:
-- Provide general educational information only.
-- Do NOT provide personalized medical advice or dosing instructions.
-- Encourage consulting a licensed clinician for medical decisions.
-- You can explain what the user has logged, summarize protocols, and answer questions about app features.
-
-User’s active protocols:
-{protocol_summary}
-
-Peptides available in database (names):
-{", ".join([p.name for p in all_peptides])}
-""".strip()
-
+    """Handle AI chat messages"""
     try:
-        resp = openai_client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        data = request.get_json()
+        user_message = data.get('message', '')
+        
+        if not user_message:
+            return jsonify({'error': 'No message provided'}), 400
+        
+        # Get user's peptide data for context
+        db_session = get_session(db_url)
+        db = PeptideDB(db_session)
+        
+        # Get user's protocols and peptides
+        protocols = db.list_active_protocols()
+        all_peptides = db.list_peptides()
+        
+        # Build context about user's data
+        user_context = f"User has {len(protocols)} active protocols"
+        if protocols:
+            protocol_list = ", ".join([f"{p.peptide.name} ({p.dose_mcg}mcg {p.frequency_per_day}x/day)" for p in protocols[:3]])
+            user_context += f": {protocol_list}"
+        
+        db_session.close()
+        
+        # System prompt with peptide knowledge
+        system_prompt = f"""You are an expert peptide advisor for a peptide tracking application. You help users understand peptides, create protocols, and manage their peptide regimens safely.
+
+IMPORTANT SAFETY GUIDELINES:
+- Always emphasize that this is educational information only
+- Recommend users consult healthcare professionals before starting any peptide
+- Never diagnose conditions or prescribe treatments
+- Be conservative with dosing recommendations
+- Warn about potential side effects and contraindications
+
+AVAILABLE PEPTIDES IN DATABASE:
+{', '.join([p.name for p in all_peptides[:20]])}
+
+USER'S CURRENT DATA:
+{user_context}
+
+When answering:
+1. Be helpful and informative
+2. Provide specific dosing ranges when appropriate
+3. Explain benefits and risks
+4. Suggest peptide stacks when relevant
+5. Reference the user's current protocols when helpful
+6. Keep responses concise but complete (2-4 paragraphs max)
+
+Remember: You're a knowledgeable assistant, not a doctor."""
+
+        # Call OpenAI API
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
+                {"role": "user", "content": user_message}
             ],
-            max_tokens=400,
-            temperature=0.5,
+            max_tokens=500,
+            temperature=0.7
         )
-        assistant_message = resp.choices[0].message.content
-        return jsonify({"success": True, "message": assistant_message})
+        
+        assistant_message = response.choices[0].message.content
+        
+        return jsonify({
+            'message': assistant_message,
+            'success': True
+        })
+        
     except Exception as e:
         print(f"Chat error: {e}")
-        return jsonify({"success": False, "error": "AI request failed. Check server logs."}), 500
+        return jsonify({
+            'error': 'Failed to get AI response. Please try again.',
+            'success': False
+        }), 500
 
 
-# -------------------- Error handlers --------------------
+# ==================== ERROR HANDLERS ====================
+
+@app.route('/api/vials/<int:peptide_id>')
+@login_required
+def api_vials_by_peptide(peptide_id):
+    """Get active vials for a peptide (AJAX endpoint)"""
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    vials = db.list_active_vials(peptide_id)
+    
+    vials_data = [{
+        'id': v.id,
+        'mg_amount': v.mg_amount,
+        'concentration': v.concentration_mcg_per_ml,
+        'remaining_ml': v.remaining_ml
+    } for v in vials]
+    
+    db_session.close()
+    
+    return jsonify(vials_data)
+
+
+# ==================== ERROR HANDLERS ====================
+
 @app.errorhandler(404)
 def not_found(error):
     return render_template('404.html'), 404
@@ -788,6 +599,19 @@ def server_error(error):
     return render_template('500.html'), 500
 
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    app.run(debug=True, host="0.0.0.0", port=port)
+# ==================== RUN APPLICATION ====================
+
+if __name__ == '__main__':
+    # Create tables
+    engine = create_engine(db_url)
+    ModelBase.metadata.create_all(engine)
+    
+    print("\n" + "="*60)
+    print("PEPTIDE TRACKER WEB APP")
+    print("="*60)
+    print(f"Database: {db_url}")
+    print("Starting server at: http://127.0.0.1:5000")
+    print("Press CTRL+C to stop")
+    print("="*60 + "\n")
+    
+    app.run(debug=True, host='0.0.0.0', port=5000)
