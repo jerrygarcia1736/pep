@@ -1,0 +1,61 @@
+/* --- Compare cards: show a vial placeholder when images are missing --- */
+.peptide-hero {
+  height: 180px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(13,110,253,.10), rgba(25,135,84,.08));
+  border: 1px solid rgba(0,0,0,.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.peptide-hero img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.peptide-hero.no-img {
+  background: linear-gradient(135deg, rgba(13,110,253,.10), rgba(255,193,7,.10));
+}
+
+.peptide-hero.no-img::before {
+  content: "";
+  width: 76px;
+  height: 76px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%20fill%3D%22none%22%20stroke%3D%22%25230d6efd%22%20stroke-width%3D%223%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M22%206h20M26%206v10l-6%208v26a8%208%200%200%200%208%208h8a8%208%200%200%200%208-8V24l-6-8V6%22/%3E%3Cpath%20d%3D%22M24%2024h16%22/%3E%3Cpath%20d%3D%22M24%2034h16%22/%3E%3Cpath%20d%3D%22M24%2044h16%22/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  opacity: .35;
+}
+
+/* Make Compare control more obvious + easier to click */
+.compare-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding-top: .75rem;
+  border-top: 1px solid rgba(0,0,0,.08);
+}
+
+.compare-row .form-check {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.compare-row .form-check-input {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.compare-row .form-check-label {
+  font-weight: 600;
+}
+
+/* Dashboard: keep 'status' from eating space */
+#recoStatus:empty { display:none; }
