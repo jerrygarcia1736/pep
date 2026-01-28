@@ -3,43 +3,67 @@
 {% block title %}Dashboard - Peptide Tracker{% endblock %}
 
 {% block content %}
-<h1 class="mb-4">
-    <i class="bi bi-speedometer2"></i> Dashboard
-</h1>
+<!-- App-Style Header -->
+<div class="mb-4">
+    <h1 class="mb-2">
+        <i class="bi bi-speedometer2"></i> Dashboard
+    </h1>
+    <p class="text-muted mb-0">Track your peptide protocols, vials, and injections all in one place</p>
+</div>
 
 <!-- Stats Cards -->
-<div class="row g-4 mb-4">
-    <div class="col-md-3">
-        <div class="card bg-primary text-white">
-            <div class="card-body">
-                <h5 class="card-title">Active Protocols</h5>
-                <p class="display-4">{{ stats.active_protocols }}</p>
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="card bg-primary text-white h-100 shadow-sm">
+            <div class="card-body py-3">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h6 class="card-title mb-1 opacity-75">Active Protocols</h6>
+                        <p class="display-6 mb-0">{{ stats.active_protocols }}</p>
+                    </div>
+                    <i class="bi bi-calendar-check opacity-50" style="font-size: 1.5rem;"></i>
+                </div>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card bg-success text-white">
-            <div class="card-body">
-                <h5 class="card-title">Active Vials</h5>
-                <p class="display-4">{{ stats.active_vials }}</p>
+    <div class="col-6 col-md-3">
+        <div class="card bg-success text-white h-100 shadow-sm">
+            <div class="card-body py-3">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h6 class="card-title mb-1 opacity-75">Active Vials</h6>
+                        <p class="display-6 mb-0">{{ stats.active_vials }}</p>
+                    </div>
+                    <i class="bi bi-box opacity-50" style="font-size: 1.5rem;"></i>
+                </div>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card bg-info text-white">
-            <div class="card-body">
-                <h5 class="card-title">This Week</h5>
-                <p class="display-4">{{ stats.injections_this_week }}</p>
-                <small>injections</small>
+    <div class="col-6 col-md-3">
+        <div class="card bg-info text-white h-100 shadow-sm">
+            <div class="card-body py-3">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h6 class="card-title mb-1 opacity-75">This Week</h6>
+                        <p class="display-6 mb-0">{{ stats.injections_this_week }}</p>
+                        <small class="opacity-75">injections</small>
+                    </div>
+                    <i class="bi bi-activity opacity-50" style="font-size: 1.5rem;"></i>
+                </div>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card bg-warning text-white">
-            <div class="card-body">
-                <h5 class="card-title">Peptides</h5>
-                <p class="display-4">{{ stats.total_peptides }}</p>
-                <small>in database</small>
+    <div class="col-6 col-md-3">
+        <div class="card bg-warning text-dark h-100 shadow-sm">
+            <div class="card-body py-3">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h6 class="card-title mb-1 opacity-75">Peptides</h6>
+                        <p class="display-6 mb-0">{{ stats.total_peptides }}</p>
+                        <small class="opacity-75">in database</small>
+                    </div>
+                    <i class="bi bi-capsule opacity-50" style="font-size: 1.5rem;"></i>
+                </div>
             </div>
         </div>
     </div>
@@ -110,30 +134,35 @@
 
 
 <!-- Quick Actions -->
-<div class="card mb-4">
+<div class="card mb-4 shadow-sm">
     <div class="card-header bg-primary text-white">
         <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Actions</h5>
     </div>
     <div class="card-body">
         <div class="row g-3">
-            <div class="col-md-3">
-                <a href="{{ url_for('log_injection') }}" class="btn btn-lg btn-success w-100">
-                    <i class="bi bi-plus-circle"></i><br>Log Injection
+            <div class="col-6 col-md-3">
+                <a href="{{ url_for('log_injection') }}" class="btn btn-lg btn-success w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
+                    <i class="bi bi-plus-circle mb-2" style="font-size: 2rem;"></i>
+                    <span>Log Injection</span>
                 </a>
             </div>
-            <div class="col-md-3">
-                <a href="{{ url_for('calculator') }}" class="btn btn-lg btn-info w-100">
-                    <i class="bi bi-calculator"></i><br>Calculator
+            <div class="col-6 col-md-3">
+                <a href="{{ url_for('calculator') }}" class="btn btn-lg btn-info w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
+                    <i class="bi bi-calculator mb-2" style="font-size: 2rem;"></i>
+                    <span class="fw-semibold">Peptide Calculator</span>
+                    <small class="text-white-50 mt-1" style="font-size: 0.7rem;">Calculate dosing & reconstitution</small>
                 </a>
             </div>
-            <div class="col-md-3">
-                <a href="{{ url_for('add_vial') }}" class="btn btn-lg btn-warning w-100">
-                    <i class="bi bi-box"></i><br>Add Vial
+            <div class="col-6 col-md-3">
+                <a href="{{ url_for('add_vial') }}" class="btn btn-lg btn-warning w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
+                    <i class="bi bi-box mb-2" style="font-size: 2rem;"></i>
+                    <span>Add Vial</span>
                 </a>
             </div>
-            <div class="col-md-3">
-                <a href="{{ url_for('add_protocol') }}" class="btn btn-lg btn-primary w-100">
-                    <i class="bi bi-calendar-plus"></i><br>New Protocol
+            <div class="col-6 col-md-3">
+                <a href="{{ url_for('add_protocol') }}" class="btn btn-lg btn-primary w-100 h-100 d-flex flex-column align-items-center justify-content-center py-3">
+                    <i class="bi bi-calendar-plus mb-2" style="font-size: 2rem;"></i>
+                    <span>New Protocol</span>
                 </a>
             </div>
         </div>
