@@ -27,6 +27,37 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-i
 # -------------------------
 db_url = Config.DATABASE_URL
 engine = create_engine(db_url)
+
+def ensure_users_tier_column(engine):
+    """
+    Render is running Postgres (psycopg2). Your existing users table was created before `tier` existed,
+    so SELECTs fail until we add the column. This is a safe startup migration.
+    """
+    try:
+        dialect = (engine.dialect.name or "").lower()
+        if dialect.startswith("postgres"):
+            with engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'free';")
+                )
+        elif dialect.startswith("sqlite"):
+            with engine.begin() as conn:
+                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(users);")).fetchall()]
+                if "tier" not in cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
+        else:
+            # best-effort fallback
+            with engine.begin() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
+                except Exception:
+                    pass
+    except Exception as e:
+        # Do not crash the whole app on migration attempts; log and continue
+        print(f"Warning: could not ensure users.tier column: {e}")
+
+# IMPORTANT: run migration BEFORE create_all and before any queries
+ensure_users_tier_column(engine)
 ModelBase.metadata.create_all(engine)
 
 # -------------------------
@@ -83,7 +114,7 @@ def get_current_user():
         db.close()
 
 # -------------------------
-# Jinja helpers (CRITICAL FIX)
+# Jinja helpers
 # -------------------------
 class AnonymousUser:
     is_authenticated = False
@@ -123,6 +154,40 @@ def index():
         return redirect(url_for("dashboard"))
     return render_template("index.html")
 
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        username = request.form.get("username")
+        email = request.form.get("email")
+        password = request.form.get("password")
+        confirm = request.form.get("confirm_password")
+
+        if not username or not email or not password:
+            flash("All fields are required.", "danger")
+            return redirect(url_for("register"))
+
+        if password != confirm:
+            flash("Passwords do not match.", "danger")
+            return redirect(url_for("register"))
+
+        db = get_session(db_url)
+        try:
+            existing = db.query(User).filter((User.username == username) | (User.email == email)).first()
+            if existing:
+                flash("Username or email already exists.", "danger")
+                return redirect(url_for("register"))
+
+            user = User(username=username, email=email, tier="free")
+            user.set_password(password)
+            db.add(user)
+            db.commit()
+            flash("Registration successful! Please log in.", "success")
+            return redirect(url_for("login"))
+        finally:
+            db.close()
+
+    return render_template("register.html")
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -159,7 +224,6 @@ def dashboard():
 def peptides():
     return render_template("peptides.html")
 
-# Optional placeholder to avoid nav crashes if referenced
 @app.route("/chat")
 @login_required
 def chat():
