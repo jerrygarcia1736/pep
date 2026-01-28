@@ -84,7 +84,7 @@ class User(ModelBase):
     username = Column(String(80), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    tier = Column(String(20), nullable=False, default=\"free\")  # free | tier1 | tier2 | admin
+    tier = Column(String(20), nullable=False, default="free")  # free | tier1 | tier2 | admin
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def set_password(self, password: str) -> None:
