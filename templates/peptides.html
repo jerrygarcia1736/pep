@@ -2,6 +2,13 @@
 
 {% block title %}Peptides - Peptide Tracker{% endblock %}
 
+{% block extra_css %}
+<style>
+.peptide-card{transition:transform .15s ease, box-shadow .15s ease;}
+.peptide-card:hover{transform:translateY(-3px);box-shadow:0 .5rem 1rem rgba(0,0,0,.12)!important;}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="d-flex align-items-center justify-content-between mb-3">
     <h1 class="mb-0">
@@ -20,7 +27,7 @@
 <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
     {% for peptide in peptides %}
     <div class="col">
-        <div class="card h-100 shadow-sm">
+        <div class="card h-100 shadow-sm peptide-card">
             <div class="card-header d-flex align-items-center justify-content-between">
                 <div class="form-check mb-0">
                     <input class="form-check-input compare-check" type="checkbox" value="{{ peptide.id }}" id="cmp{{ peptide.id }}">

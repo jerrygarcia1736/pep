@@ -416,6 +416,98 @@ def peptide_detail(peptide_id: int):
 
 
 
+
+# -------------------- Recommendations (Age slider) --------------------
+def score_peptide_for_age(peptide, age: int) -> tuple[int, str]:
+    """
+    Returns (score, reason). Heuristic UX ranking only (not medical advice).
+    Uses text fields already in the database to guess relevance.
+    """
+    age = max(13, min(99, int(age or 35)))
+    text = " ".join([
+        (getattr(peptide, "name", "") or ""),
+        (getattr(peptide, "common_name", "") or ""),
+        (getattr(peptide, "primary_benefits", "") or ""),
+        (getattr(peptide, "notes", "") or ""),
+    ]).lower()
+
+    def has(*kw):
+        return any(k in text for k in kw)
+
+    score = 0
+    reasons = []
+
+    # Age buckets (very rough)
+    if age < 30:
+        if has("recovery", "repair", "injury", "tendon", "ligament", "muscle"):
+            score += 5; reasons.append("Recovery / training support")
+        if has("skin", "collagen", "hair"):
+            score += 3; reasons.append("Skin / appearance support")
+    elif age < 45:
+        if has("recovery", "repair", "injury", "inflammation"):
+            score += 4; reasons.append("Recovery / inflammation")
+        if has("sleep", "stress"):
+            score += 2; reasons.append("Sleep / stress")
+        if has("skin", "collagen"):
+            score += 3; reasons.append("Skin / collagen")
+    elif age < 60:
+        if has("metabolic", "glucose", "weight", "appetite", "fat"):
+            score += 5; reasons.append("Metabolic / body composition")
+        if has("recovery", "inflammation", "joint"):
+            score += 3; reasons.append("Recovery / inflammation")
+        if has("cognitive", "focus", "memory"):
+            score += 2; reasons.append("Cognitive support")
+    else:
+        if has("mitochond", "energy", "longevity", "aging", "oxidative"):
+            score += 5; reasons.append("Mitochondrial / longevity")
+        if has("cognitive", "memory", "neuro"):
+            score += 3; reasons.append("Cognitive support")
+        if has("metabolic", "glucose", "weight"):
+            score += 3; reasons.append("Metabolic support")
+
+    # General boosts
+    if (getattr(peptide, "research_links", "") or "").strip():
+        score += 2; reasons.append("Has research links")
+    if (getattr(peptide, "contraindications", "") or "").strip():
+        score += 1  # informational completeness
+
+    # Keep reasons concise
+    reason = ", ".join(dict.fromkeys(reasons))[:160] if reasons else "General info available"
+    return score, reason
+
+
+@app.route("/api/recommendations")
+@login_required
+def api_recommendations():
+    age_raw = request.args.get("age", "35")
+    try:
+        age = int(age_raw)
+    except Exception:
+        age = 35
+
+    db_session = get_session(db_url)
+    peptides_all = db_session.query(Peptide).all()
+    db_session.close()
+
+    ranked = []
+    for p in peptides_all:
+        score, reason = score_peptide_for_age(p, age)
+        slug = slugify_name(p.name)
+        ranked.append({
+            "id": p.id,
+            "name": p.name,
+            "common_name": getattr(p, "common_name", "") or "",
+            "primary_benefits": (getattr(p, "primary_benefits", "") or "")[:220],
+            "score": score,
+            "reason": reason,
+            "image_url": url_for("static", filename=f"img/peptides/{slug}.png"),
+        })
+
+    ranked.sort(key=lambda x: (x["score"], x["name"]), reverse=True)
+    # Return top 6
+    return jsonify({"age": age, "items": ranked[:6]})
+
+
 # -------------------- Compare --------------------
 def compute_compare_scores(peptide):
     """

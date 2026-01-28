@@ -45,6 +45,40 @@
     </div>
 </div>
 
+
+<!-- Age Slider Recommendations -->
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-light d-flex align-items-center justify-content-between">
+    <div class="fw-semibold">
+      <i class="bi bi-sliders"></i> Age Slider (Recommendations)
+    </div>
+    <span class="badge text-bg-secondary" id="ageBadge">35</span>
+  </div>
+  <div class="card-body">
+    <div class="row g-3 align-items-center">
+      <div class="col-12 col-lg-6">
+        <label for="ageSlider" class="form-label mb-1">Age</label>
+        <input type="range" class="form-range" min="18" max="85" value="35" step="1" id="ageSlider">
+        <div class="d-flex justify-content-between small text-muted">
+          <span>18</span><span>35</span><span>50</span><span>85</span>
+        </div>
+        <div class="small text-muted mt-2">
+          This is a UI prioritization tool based on your peptide notes/benefits text — not medical advice.
+        </div>
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <div class="d-flex align-items-center justify-content-between">
+          <div class="fw-semibold">Suggested “start here” list</div>
+          <div class="small text-muted" id="recoStatus">Loading…</div>
+        </div>
+        <div class="list-group mt-2" id="recoList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
 <!-- Quick Actions -->
 <div class="card mb-4">
     <div class="card-header bg-primary text-white">
@@ -159,4 +193,73 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+
+
+{% block extra_js %}
+<script>
+(function() {
+  const slider = document.getElementById("ageSlider");
+  const badge = document.getElementById("ageBadge");
+  const list = document.getElementById("recoList");
+  const status = document.getElementById("recoStatus");
+
+  if (!slider || !badge || !list || !status) return;
+
+  let t = null;
+
+  function escapeHtml(s) {
+    return (s || "").replace(/[&<>"']/g, function(m) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]);
+    });
+  }
+
+  async function load(age) {
+    badge.textContent = age;
+    status.textContent = "Loading…";
+    list.innerHTML = "";
+
+    try {
+      const r = await fetch(`/api/recommendations?age=${encodeURIComponent(age)}`, { credentials: "same-origin" });
+      const data = await r.json();
+
+      const items = data.items || [];
+      if (!items.length) {
+        status.textContent = "No data";
+        list.innerHTML = `<div class="text-muted small">No peptides found to recommend.</div>`;
+        return;
+      }
+
+      status.textContent = `Top ${items.length}`;
+
+      list.innerHTML = items.map(it => `
+        <a class="list-group-item list-group-item-action d-flex gap-3 align-items-center" href="/peptides/${it.id}">
+          <img src="${escapeHtml(it.image_url)}" loading="lazy" decoding="async"
+               onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?> <svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;80&quot; height=&quot;80&quot; viewBox=&quot;0 0 80 80&quot;> <rect width=&quot;80&quot; height=&quot;80&quot; rx=&quot;12&quot; fill=&quot;%23f1f3f5&quot;/> <text x=&quot;50%&quot; y=&quot;54%&quot; dominant-baseline=&quot;middle&quot; text-anchor=&quot;middle&quot; fill=&quot;%236c757d&quot; font-family=&quot;Arial&quot; font-size=&quot;10&quot;>No image</text> </svg>';"
+               style="width:48px;height:48px;border-radius:12px;object-fit:cover;background:#f1f3f5;">
+          <div class="flex-grow-1">
+            <div class="fw-semibold">${escapeHtml(it.name)}</div>
+            <div class="small text-muted">${escapeHtml(it.reason || "")}</div>
+          </div>
+          <span class="badge text-bg-light">Score ${it.score}</span>
+        </a>
+      `).join("");
+    } catch (e) {
+      status.textContent = "Error";
+      list.innerHTML = `<div class="text-danger small">Could not load recommendations.</div>`;
+    }
+  }
+
+  function debounceLoad() {
+    const age = slider.value;
+    badge.textContent = age;
+    if (t) clearTimeout(t);
+    t = setTimeout(() => load(age), 200);
+  }
+
+  slider.addEventListener("input", debounceLoad);
+  load(slider.value);
+})();
+</script>
 {% endblock %}
