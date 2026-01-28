@@ -20,7 +20,7 @@ from calculator import PeptideCalculator
 from config import Config
 
 # Import models for user management
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, Float
 from sqlalchemy.ext.declarative import declarative_base
 from models import Base as ModelBase
 
