@@ -160,6 +160,36 @@ class Protocol(Base):
         return f"<Protocol(name='{self.name}', dose={self.dose_mcg}mcg)>"
 
 
+
+class ProtocolTemplate(Base):
+    """Example starter protocol templates (free tier can include a small set)."""
+    __tablename__ = 'protocol_templates'
+
+    id = Column(Integer, primary_key=True)
+    peptide_id = Column(Integer, ForeignKey('peptides.id'), nullable=False)
+
+    # Display
+    name = Column(String(200), nullable=False)  # e.g., "BPC-157 – Recovery (Example)"
+    description = Column(Text)
+
+    # Template parameters (educational examples)
+    dose_mcg = Column(Float, nullable=False)
+    frequency_per_day = Column(Integer, nullable=False)
+    duration_days = Column(Integer)  # Suggested cycle length
+
+    goals = Column(Text)  # e.g., "Recovery, Gut"
+    is_free = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    peptide = relationship("Peptide")
+
+    def __repr__(self):
+        return f"<ProtocolTemplate(name='{self.name}', dose={self.dose_mcg}mcg)>"
+
+
 class Injection(Base):
     """Individual injection log"""
     __tablename__ = 'injections'
