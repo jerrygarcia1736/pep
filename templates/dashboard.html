@@ -96,7 +96,13 @@
             <i class="bi bi-star-fill"></i> Paid Version Only
           </span>
         </div>
-        <div class="list-group mt-2" id="recoList"></div>
+        <div class="list-group mt-2" id="recoList">
+          <div class="text-muted text-center py-4">
+            <i class="bi bi-lock-fill" style="font-size: 2rem;"></i>
+            <div class="mt-2">Premium feature</div>
+            <div class="small">Upgrade to unlock personalized recommendations</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -282,10 +288,14 @@
 
   // Recompute when goals change
   document.querySelectorAll(".goalToggle").forEach((el) => {
-    el.addEventListener("change", () => load(slider.value));
+    el.addEventListener("change", () => {
+      // Premium feature - don't actually load
+      // load(slider.value);
+    });
   });
 
-  load(slider.value);
+  // Don't auto-load on page load - this is a premium feature
+  // load(slider.value);
 })();
 </script>
 {% endblock %}
