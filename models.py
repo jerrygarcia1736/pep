@@ -59,6 +59,9 @@ class Peptide(Base):
     contraindications = Column(Text)
     notes = Column(Text)
     research_links = Column(Text)  # URLs to studies
+
+    # UI / assets
+    image_filename = Column(String(255))  # e.g. 'bpc-157.png' stored under static/img/peptides/
     
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -40,6 +40,46 @@ class User(ModelBase):
 
 
 # -------------------- App setup --------------------
+
+
+# -------------------- Schema helpers --------------------
+def ensure_peptides_image_filename_column(engine):
+    """
+    Adds peptides.image_filename if missing.
+    Works for SQLite and Postgres (best-effort).
+    """
+    try:
+        with engine.begin() as conn:
+            # SQLite: PRAGMA table_info
+            try:
+                rows = conn.exec_driver_sql("PRAGMA table_info(peptides);").fetchall()
+                cols = {r[1] for r in rows}  # name is index 1
+                if "image_filename" in cols:
+                    return
+            except Exception:
+                pass  # not SQLite
+
+            # Postgres: information_schema check (safe even if not PG; may fail)
+            try:
+                exists = conn.exec_driver_sql("""
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name='peptides' AND column_name='image_filename'
+                    LIMIT 1;
+                """).fetchone()
+                if exists:
+                    return
+            except Exception:
+                pass
+
+            # Add column (if already exists, will raise -> ignored)
+            try:
+                conn.exec_driver_sql("ALTER TABLE peptides ADD COLUMN image_filename VARCHAR(255);")
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Schema check failed (non-fatal): {e}")
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
@@ -417,13 +457,16 @@ def peptide_detail(peptide_id: int):
 
 
 
-# -------------------- Recommendations (Age slider) --------------------
-def score_peptide_for_age(peptide, age: int) -> tuple[int, str]:
+# -------------------- Recommendations (Age slider + Goals toggles) --------------------
+def score_peptide_for_age(peptide, age: int, goals: list[str] | None = None) -> tuple[int, str]:
     """
     Returns (score, reason). Heuristic UX ranking only (not medical advice).
     Uses text fields already in the database to guess relevance.
+    goals: optional list like ["fat_loss","recovery","skin","cognition","longevity"]
     """
     age = max(13, min(99, int(age or 35)))
+    goals = [g.strip().lower() for g in (goals or []) if g and isinstance(g, str)]
+
     text = " ".join([
         (getattr(peptide, "name", "") or ""),
         (getattr(peptide, "common_name", "") or ""),
@@ -437,33 +480,58 @@ def score_peptide_for_age(peptide, age: int) -> tuple[int, str]:
     score = 0
     reasons = []
 
-    # Age buckets (very rough)
+    # Keyword packs per goal (tunable)
+    GOAL_KW = {
+        "fat_loss": ("weight","fat","appetite","glucose","metabolic","insulin","lean"),
+        "recovery": ("recovery","repair","injury","inflammation","joint","tendon","ligament","muscle"),
+        "skin": ("skin","collagen","hair","wrinkle","texture","dermal"),
+        "cognition": ("cognitive","focus","memory","brain","neuro","mood"),
+        "longevity": ("longevity","aging","mitochond","oxidative","energy","senescence"),
+    }
+
+    # If user selected goals, boost matching text heavily (and explain why)
+    for g in goals:
+        kws = GOAL_KW.get(g)
+        if not kws:
+            continue
+        if has(*kws):
+            score += 6
+            label = {
+                "fat_loss":"Fat loss / metabolic",
+                "recovery":"Recovery",
+                "skin":"Skin",
+                "cognition":"Cognition",
+                "longevity":"Longevity / energy",
+            }.get(g, g)
+            reasons.append(label)
+
+    # Age buckets (light weighting so goals drive the result if selected)
     if age < 30:
         if has("recovery", "repair", "injury", "tendon", "ligament", "muscle"):
-            score += 5; reasons.append("Recovery / training support")
+            score += 3; reasons.append("Recovery / training support")
         if has("skin", "collagen", "hair"):
-            score += 3; reasons.append("Skin / appearance support")
+            score += 2; reasons.append("Skin / appearance support")
     elif age < 45:
         if has("recovery", "repair", "injury", "inflammation"):
-            score += 4; reasons.append("Recovery / inflammation")
+            score += 2; reasons.append("Recovery / inflammation")
         if has("sleep", "stress"):
-            score += 2; reasons.append("Sleep / stress")
+            score += 1; reasons.append("Sleep / stress")
         if has("skin", "collagen"):
-            score += 3; reasons.append("Skin / collagen")
+            score += 2; reasons.append("Skin / collagen")
     elif age < 60:
         if has("metabolic", "glucose", "weight", "appetite", "fat"):
-            score += 5; reasons.append("Metabolic / body composition")
+            score += 3; reasons.append("Metabolic / body composition")
         if has("recovery", "inflammation", "joint"):
-            score += 3; reasons.append("Recovery / inflammation")
+            score += 2; reasons.append("Recovery / inflammation")
         if has("cognitive", "focus", "memory"):
-            score += 2; reasons.append("Cognitive support")
+            score += 1; reasons.append("Cognitive support")
     else:
         if has("mitochond", "energy", "longevity", "aging", "oxidative"):
-            score += 5; reasons.append("Mitochondrial / longevity")
+            score += 3; reasons.append("Mitochondrial / longevity")
         if has("cognitive", "memory", "neuro"):
-            score += 3; reasons.append("Cognitive support")
+            score += 2; reasons.append("Cognitive support")
         if has("metabolic", "glucose", "weight"):
-            score += 3; reasons.append("Metabolic support")
+            score += 2; reasons.append("Metabolic support")
 
     # General boosts
     if (getattr(peptide, "research_links", "") or "").strip():
@@ -471,15 +539,18 @@ def score_peptide_for_age(peptide, age: int) -> tuple[int, str]:
     if (getattr(peptide, "contraindications", "") or "").strip():
         score += 1  # informational completeness
 
-    # Keep reasons concise
-    reason = ", ".join(dict.fromkeys(reasons))[:160] if reasons else "General info available"
+    # Keep reasons concise + unique
+    reason = ", ".join(dict.fromkeys(reasons))[:180] if reasons else "General info available"
     return score, reason
 
 
 @app.route("/api/recommendations")
 @login_required
 def api_recommendations():
+    # Goals toggles: fat_loss,recovery,skin,cognition,longevity
     age_raw = request.args.get("age", "35")
+    goals_raw = request.args.get("goals", "")
+    goals = [g for g in goals_raw.split(",") if g.strip()]
     try:
         age = int(age_raw)
     except Exception:
@@ -491,7 +562,7 @@ def api_recommendations():
 
     ranked = []
     for p in peptides_all:
-        score, reason = score_peptide_for_age(p, age)
+        score, reason = score_peptide_for_age(p, age, goals)
         slug = slugify_name(p.name)
         ranked.append({
             "id": p.id,
@@ -500,12 +571,12 @@ def api_recommendations():
             "primary_benefits": (getattr(p, "primary_benefits", "") or "")[:220],
             "score": score,
             "reason": reason,
-            "image_url": url_for("static", filename=f"img/peptides/{slug}.png"),
+            "image_url": url_for("static", filename=f"img/peptides/{(getattr(p, "image_filename", None) or (slug + ".png"))}"),
         })
 
     ranked.sort(key=lambda x: (x["score"], x["name"]), reverse=True)
     # Return top 6
-    return jsonify({"age": age, "items": ranked[:6]})
+    return jsonify({"age": age, "goals": goals, "items": ranked[:6]})
 
 
 # -------------------- Compare --------------------
