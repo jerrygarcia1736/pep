@@ -42,12 +42,38 @@ class User(ModelBase):
 # Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['SQLALCHEMY_DATABASE_URI'] = Config.get_database_url(use_sqlite=True)
 
-# Database setup
-db_url = Config.get_database_url(use_sqlite=True)
+# Database setup - use DATABASE_URL from Config (works with both PostgreSQL and SQLite)
+db_url = Config.DATABASE_URL
+print(f"Using database: {db_url[:20]}...")  # Print first 20 chars for debugging
+
 engine = create_engine(db_url)
 ModelBase.metadata.create_all(engine)
+
+# Initialize database with peptides if empty (for first deploy)
+def init_database():
+    """Initialize database with peptides on first run"""
+    from seed_data import seed_common_peptides
+    session = get_session(db_url)
+    from database import PeptideDB
+    db = PeptideDB(session)
+    
+    # Check if database is empty
+    peptide_count = len(db.list_peptides())
+    if peptide_count == 0:
+        print("Database is empty, seeding with common peptides...")
+        seed_common_peptides(session)
+        print(f"Seeded {len(db.list_peptides())} peptides")
+    else:
+        print(f"Database already has {peptide_count} peptides")
+    
+    session.close()
+
+# Initialize on startup
+try:
+    init_database()
+except Exception as e:
+    print(f"Warning: Could not initialize database: {e}")
 
 
 # Login decorator

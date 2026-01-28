@@ -12,20 +12,20 @@ load_dotenv()
 class Config:
     """Application configuration"""
     
-    # Database configuration
+    # Database configuration - use DATABASE_URL from environment if available
+    # This is set by Render when you add the PostgreSQL database
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    
+    # If no DATABASE_URL is set, fall back to SQLite for local development
+    if not DATABASE_URL:
+        DATABASE_URL = "sqlite:///peptide_tracker.db"
+    
+    # Legacy individual config (kept for backwards compatibility)
     DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "peptide_tracker")
     DB_USER = os.getenv("DB_USER", "postgres")
     DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-    
-    # Construct database URL
-    DATABASE_URL = (
-        f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    )
-    
-    # Alternative: SQLite for local development (no Postgres needed)
-    # DATABASE_URL = "sqlite:///peptide_tracker.db"
     
     # AI API Keys (for future use)
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
