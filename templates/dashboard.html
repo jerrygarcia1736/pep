@@ -320,9 +320,14 @@
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
           <div>
             <h4 class="mb-1">Coaching</h4>
-            <p class="text-muted mb-0">Maximize your peptides with a personalized plan for training and recovery. Ask questions about fitness, peptides, and aminos.</p>
+            <p class="text-muted mb-2">Do you have personal questions about peptides, longevity, or whether this is right for you? Or would you like help maximizing your experience with a personalized plan for training and recovery?</p>
+<p class="text-muted mb-2">I also specialize in at-home training and home bodybuilding, and can help you build effective routines that work with minimal equipment and realistic schedules.</p>
+<p class="text-muted mb-0">Feel free to book a coaching call to get started, ask questions, or talk through whatever you&rsquo;d like.</p>
           </div>
-          <a class="btn btn-primary btn-lg" href="{{ url_for('coaching') }}"><i class="bi bi-calendar2-check me-2"></i>Book a coaching call</a>
+          <div class="d-flex flex-column flex-sm-row gap-2">
+            <a class="btn btn-primary btn-lg" href="{{ url_for('coaching') }}"><i class="bi bi-calendar2-check me-2"></i>Book a coaching call</a>
+            <a class="btn btn-outline-primary btn-lg" href="/support"><i class="bi bi-life-preserver me-2"></i>Support / Questions</a>
+          </div>
         </div>
       </div>
     </div>
