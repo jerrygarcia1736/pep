@@ -223,6 +223,189 @@ def calculator():
     return render_template('calculator.html', result=result, peptides=peptides_list)
 
 
+
+# -------------------- Vials --------------------
+@app.route('/vials')
+@login_required
+def vials():
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    active_vials = db.list_active_vials()
+    peptides_list = db.list_peptides()
+    db_session.close()
+    return render_template('vials.html', vials=active_vials, peptides=peptides_list)
+
+
+@app.route('/vials/add', methods=['GET', 'POST'])
+@login_required
+def add_vial():
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    peptides_list = db.list_peptides()
+
+    if request.method == 'POST':
+        try:
+            peptide_id = int(request.form.get('peptide_id'))
+            mg_amount = float(request.form.get('mg_amount'))
+            bacteriostatic_water_ml = request.form.get('bacteriostatic_water_ml')
+            bacteriostatic_water_ml = float(bacteriostatic_water_ml) if bacteriostatic_water_ml else None
+
+            lot_number = (request.form.get('lot_number') or '').strip() or None
+            vendor = (request.form.get('vendor') or '').strip() or None
+            cost = request.form.get('cost')
+            cost = float(cost) if cost else None
+            notes = (request.form.get('notes') or '').strip() or None
+
+            db.add_vial(
+                peptide_id=peptide_id,
+                mg_amount=mg_amount,
+                bacteriostatic_water_ml=bacteriostatic_water_ml,
+                lot_number=lot_number,
+                vendor=vendor,
+                cost=cost,
+                notes=notes,
+            )
+            flash('Vial added successfully.', 'success')
+            db_session.close()
+            return redirect(url_for('vials'))
+        except Exception as e:
+            flash(f'Error adding vial: {e}', 'danger')
+
+    db_session.close()
+    return render_template('add_vial.html', peptides=peptides_list)
+
+
+# -------------------- Protocols --------------------
+@app.route('/protocols')
+@login_required
+def protocols():
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    active_protocols = db.list_active_protocols()
+    peptides_list = db.list_peptides()
+    db_session.close()
+    return render_template('protocols.html', protocols=active_protocols, peptides=peptides_list)
+
+
+@app.route('/protocols/add', methods=['GET', 'POST'])
+@login_required
+def add_protocol():
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    peptides_list = db.list_peptides()
+
+    if request.method == 'POST':
+        try:
+            peptide_id = int(request.form.get('peptide_id'))
+            name = (request.form.get('name') or '').strip() or 'Protocol'
+            dose_mcg = float(request.form.get('dose_mcg'))
+            frequency_per_day = int(request.form.get('frequency_per_day'))
+            description = (request.form.get('description') or '').strip() or None
+            duration_days = request.form.get('duration_days')
+            duration_days = int(duration_days) if duration_days else None
+            goals = (request.form.get('goals') or '').strip() or None
+            notes = (request.form.get('notes') or '').strip() or None
+
+            db.create_protocol(
+                peptide_id=peptide_id,
+                name=name,
+                dose_mcg=dose_mcg,
+                frequency_per_day=frequency_per_day,
+                description=description,
+                duration_days=duration_days,
+                goals=goals,
+                notes=notes,
+            )
+            flash('Protocol created successfully.', 'success')
+            db_session.close()
+            return redirect(url_for('protocols'))
+        except Exception as e:
+            flash(f'Error creating protocol: {e}', 'danger')
+
+    db_session.close()
+    return render_template('add_protocol.html', peptides=peptides_list)
+
+
+@app.route('/protocol/<int:protocol_id>')
+@login_required
+def protocol_detail(protocol_id: int):
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    protocol = db.get_protocol(protocol_id)
+    db_session.close()
+    if not protocol:
+        flash('Protocol not found.', 'warning')
+        return redirect(url_for('protocols'))
+    return render_template('protocol_detail.html', protocol=protocol)
+
+
+# -------------------- History / Injections --------------------
+@app.route('/history')
+@login_required
+def history():
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    injections = db.get_recent_injections(days=30)
+    peptides_list = db.list_peptides()
+    db_session.close()
+    return render_template('history.html', injections=injections, peptides=peptides_list)
+
+
+@app.route('/injections/log', methods=['GET', 'POST'])
+@login_required
+def log_injection():
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    peptides_list = db.list_peptides()
+    active_protocols = db.list_active_protocols()
+    active_vials = db.list_active_vials()
+
+    if request.method == 'POST':
+        try:
+            peptide_id = int(request.form.get('peptide_id'))
+            dose_mcg = float(request.form.get('dose_mcg'))
+            protocol_id = request.form.get('protocol_id')
+            protocol_id = int(protocol_id) if protocol_id else None
+            vial_id = request.form.get('vial_id')
+            vial_id = int(vial_id) if vial_id else None
+            notes = (request.form.get('notes') or '').strip() or None
+
+            db.log_injection(
+                peptide_id=peptide_id,
+                dose_mcg=dose_mcg,
+                protocol_id=protocol_id,
+                vial_id=vial_id,
+                notes=notes,
+            )
+            flash('Injection logged.', 'success')
+            db_session.close()
+            return redirect(url_for('history'))
+        except Exception as e:
+            flash(f'Error logging injection: {e}', 'danger')
+
+    db_session.close()
+    return render_template(
+        'log_injection.html',
+        peptides=peptides_list,
+        protocols=active_protocols,
+        vials=active_vials
+    )
+
+
+@app.route('/peptide/<int:peptide_id>')
+@login_required
+def peptide_detail(peptide_id: int):
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    peptide = db.get_peptide(peptide_id)
+    db_session.close()
+    if not peptide:
+        flash('Peptide not found.', 'warning')
+        return redirect(url_for('peptides'))
+    return render_template('peptide_detail.html', peptide=peptide)
+
+
+
 # -------------------- Chat --------------------
 @app.route('/chat')
 @login_required
