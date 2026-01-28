@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}Compare - Peptide Tracker{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h1 class="mb-0"><i class="bi bi-bar-chart-fill"></i> Compare Peptides</h1>
+  <a class="btn btn-outline-secondary" href="{{ url_for('peptides') }}">
+    <i class="bi bi-arrow-left"></i> Back to Library
+  </a>
+</div>
+
+<p class="text-muted">
+  Visual comparison based on fields in your database (heuristic UI scores). For informational use only — not medical advice.
+</p>
+
+<div class="row g-4 mb-4">
+  {% for item in items %}
+  <div class="col-12 col-md-6 col-lg-3">
+    <div class="card h-100 shadow-sm">
+      <div class="ratio ratio-1x1 bg-light">
+        <img src="{{ item.image_url }}"
+             alt="{{ item.name }}"
+             class="w-100 h-100 object-fit-cover"
+             onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?> <svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;600&quot; height=&quot;600&quot; viewBox=&quot;0 0 600 600&quot;> <rect width=&quot;600&quot; height=&quot;600&quot; fill=&quot;%23f1f3f5&quot;/> <text x=&quot;50%&quot; y=&quot;50%&quot; dominant-baseline=&quot;middle&quot; text-anchor=&quot;middle&quot; fill=&quot;%236c757d&quot; font-family=&quot;Arial&quot; font-size=&quot;20&quot;>No image</text> </svg>';">
+      </div>
+
+      <div class="card-body">
+        <div class="d-flex align-items-start justify-content-between">
+          <div>
+            <h5 class="card-title mb-1">{{ item.name }}</h5>
+            <div class="text-muted small">{{ item.common_name }}</div>
+          </div>
+          <span class="badge text-bg-primary">{{ item.primary_route or '—' }}</span>
+        </div>
+
+        <div class="mt-3">
+          <div class="d-flex justify-content-between small">
+            <span>Evidence</span><span>{{ item.scores.evidence }}/5</span>
+          </div>
+          <div class="progress mb-2" style="height: 8px;">
+            <div class="progress-bar" role="progressbar" style="width: {{ item.scores.evidence * 20 }}%"></div>
+          </div>
+
+          <div class="d-flex justify-content-between small">
+            <span>Convenience</span><span>{{ item.scores.convenience }}/5</span>
+          </div>
+          <div class="progress mb-2" style="height: 8px;">
+            <div class="progress-bar" role="progressbar" style="width: {{ item.scores.convenience * 20 }}%"></div>
+          </div>
+
+          <div class="d-flex justify-content-between small">
+            <span>Cost</span><span>{{ item.scores.cost }}/5</span>
+          </div>
+          <div class="progress mb-2" style="height: 8px;">
+            <div class="progress-bar" role="progressbar" style="width: {{ item.scores.cost * 20 }}%"></div>
+          </div>
+
+          <div class="d-flex justify-content-between small">
+            <span>Complexity</span><span>{{ item.scores.complexity }}/5</span>
+          </div>
+          <div class="progress" style="height: 8px;">
+            <div class="progress-bar" role="progressbar" style="width: {{ item.scores.complexity * 20 }}%"></div>
+          </div>
+        </div>
+
+        <hr class="my-3">
+
+        <ul class="list-unstyled small mb-0">
+          {% if item.typical_dose_min %}
+          <li><strong>Dose:</strong> {{ item.typical_dose_min }}{% if item.typical_dose_max %}-{{ item.typical_dose_max }}{% endif %} mcg</li>
+          {% endif %}
+          {% if item.frequency_per_day %}
+          <li><strong>Frequency:</strong> {{ item.frequency_per_day }}x/day</li>
+          {% endif %}
+          {% if item.half_life_hours %}
+          <li><strong>Half-life:</strong> {{ item.half_life_hours }} hours</li>
+          {% endif %}
+          {% if item.storage_method %}
+          <li><strong>Storage:</strong> {{ item.storage_method }}</li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <div class="card-footer">
+        <a href="{{ url_for('peptide_detail', peptide_id=item.id) }}" class="btn btn-sm btn-outline-primary w-100">
+          View Details
+        </a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h5 class="card-title mb-3"><i class="bi bi-radar"></i> Visual Comparison</h5>
+    <canvas id="radarChart" height="120"></canvas>
+  </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+  <div class="card-body">
+    <h5 class="card-title mb-3"><i class="bi bi-layout-text-sidebar"></i> Side-by-side details</h5>
+
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th style="width: 180px;">Attribute</th>
+            {% for item in items %}
+            <th>{{ item.name }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="text-muted">Primary benefits</td>
+            {% for item in items %}
+            <td>{{ item.primary_benefits or "—" }}</td>
+            {% endfor %}
+          </tr>
+          <tr>
+            <td class="text-muted">Contraindications / notes</td>
+            {% for item in items %}
+            <td>{{ item.notes or "—" }}</td>
+            {% endfor %}
+          </tr>
+          <tr>
+            <td class="text-muted">Research links</td>
+            {% for item in items %}
+            <td>
+              {% if item.research_links %}
+                <a href="{{ item.research_links }}" target="_blank" rel="noopener">Open</a>
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="text-muted small">
+      Note: Scores are heuristic UI signals based on what you’ve stored (e.g., frequency, storage, and presence of links/notes). They are not clinical ratings.
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+  const labels = {{ chart_labels | tojson }};
+  const series = {{ chart_series | tojson }};
+
+  const datasets = series.map(s => ({
+    label: s.label,
+    data: s.data,
+    fill: true,
+    pointRadius: 3,
+    borderWidth: 2
+  }));
+
+  const ctx = document.getElementById('radarChart');
+  new Chart(ctx, {
+    type: 'radar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      scales: {
+        r: {
+          min: 0,
+          max: 5,
+          ticks: { stepSize: 1 }
+        }
+      },
+      plugins: {
+        legend: { position: 'bottom' }
+      }
+    }
+  });
+})();
+</script>
+{% endblock %}

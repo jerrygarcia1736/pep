@@ -3,25 +3,45 @@
 {% block title %}Peptides - Peptide Tracker{% endblock %}
 
 {% block content %}
-<h1 class="mb-4">
-    <i class="bi bi-list-ul"></i> Peptide Library
-</h1>
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h1 class="mb-0">
+        <i class="bi bi-list-ul"></i> Peptide Library
+    </h1>
+
+    <button id="compareBtn" class="btn btn-primary" disabled>
+        <i class="bi bi-bar-chart-fill"></i> Compare (<span id="compareCount">0</span>)
+    </button>
+</div>
+
+<p class="text-muted mb-4">
+    Select 2–4 peptides to compare side-by-side with visuals. (Educational UI only — not medical advice.)
+</p>
 
 <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
     {% for peptide in peptides %}
     <div class="col">
-        <div class="card h-100">
+        <div class="card h-100 shadow-sm">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <div class="form-check mb-0">
+                    <input class="form-check-input compare-check" type="checkbox" value="{{ peptide.id }}" id="cmp{{ peptide.id }}">
+                    <label class="form-check-label small" for="cmp{{ peptide.id }}">Compare</label>
+                </div>
+                <span class="badge text-bg-light">
+                    {{ peptide.primary_route.value if peptide.primary_route else '—' }}
+                </span>
+            </div>
+
             <div class="card-body">
-                <h5 class="card-title">{{ peptide.name }}</h5>
-                <h6 class="card-subtitle mb-2 text-muted">{{ peptide.common_name }}</h6>
-                
+                <h5 class="card-title mb-1">{{ peptide.name }}</h5>
+                <div class="text-muted small mb-2">{{ peptide.common_name }}</div>
+
                 <p class="card-text small">
                     {{ peptide.primary_benefits[:150] }}{% if peptide.primary_benefits|length > 150 %}...{% endif %}
                 </p>
-                
-                <ul class="list-unstyled small">
+
+                <ul class="list-unstyled small mb-0">
                     {% if peptide.typical_dose_min %}
-                    <li><strong>Dose:</strong> {{ peptide.typical_dose_min }}-{{ peptide.typical_dose_max }} mcg</li>
+                    <li><strong>Dose:</strong> {{ peptide.typical_dose_min }}{% if peptide.typical_dose_max %}-{{ peptide.typical_dose_max }}{% endif %} mcg</li>
                     {% endif %}
                     {% if peptide.frequency_per_day %}
                     <li><strong>Frequency:</strong> {{ peptide.frequency_per_day }}x/day</li>
@@ -31,13 +51,69 @@
                     {% endif %}
                 </ul>
             </div>
-            <div class="card-footer">
-                <a href="{{ url_for('peptide_detail', peptide_id=peptide.id) }}" class="btn btn-sm btn-primary">
+
+            <div class="card-footer d-flex gap-2">
+                <a href="{{ url_for('peptide_detail', peptide_id=peptide.id) }}" class="btn btn-sm btn-outline-primary">
                     View Details
                 </a>
+                <button class="btn btn-sm btn-primary ms-auto quick-compare" data-id="{{ peptide.id }}">
+                    Add to Compare
+                </button>
             </div>
         </div>
     </div>
     {% endfor %}
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+  const maxCompare = 4;
+  const minCompare = 2;
+
+  const btn = document.getElementById("compareBtn");
+  const countEl = document.getElementById("compareCount");
+  const checks = Array.from(document.querySelectorAll(".compare-check"));
+
+  function selectedIds() {
+    return checks.filter(c => c.checked).map(c => c.value);
+  }
+
+  function refresh() {
+    const ids = selectedIds();
+    countEl.textContent = ids.length;
+    btn.disabled = !(ids.length >= minCompare && ids.length <= maxCompare);
+
+    // Prevent selecting >4
+    if (ids.length >= maxCompare) {
+      checks.filter(c => !c.checked).forEach(c => c.disabled = true);
+    } else {
+      checks.forEach(c => c.disabled = false);
+    }
+  }
+
+  checks.forEach(c => c.addEventListener("change", refresh));
+
+  // "Add to Compare" convenience button
+  document.querySelectorAll(".quick-compare").forEach(b => {
+    b.addEventListener("click", () => {
+      const id = b.getAttribute("data-id");
+      const cb = document.getElementById("cmp" + id);
+      if (!cb) return;
+      cb.checked = true;
+      refresh();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  });
+
+  btn.addEventListener("click", () => {
+    const ids = selectedIds();
+    const qs = encodeURIComponent(ids.join(","));
+    window.location.href = "{{ url_for('compare') }}" + "?ids=" + qs;
+  });
+
+  refresh();
+})();
+</script>
 {% endblock %}

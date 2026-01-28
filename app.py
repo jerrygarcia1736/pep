@@ -70,6 +70,15 @@ def maybe_seed_database():
 maybe_seed_database()
 
 
+
+def slugify_name(name: str) -> str:
+    """Create a filesystem-friendly slug for images, e.g. 'BPC-157' -> 'bpc-157'."""
+    import re
+    s = (name or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
 # -------------------- Auth helpers --------------------
 def login_required(f):
     @wraps(f)
@@ -404,6 +413,139 @@ def peptide_detail(peptide_id: int):
         return redirect(url_for('peptides'))
     return render_template('peptide_detail.html', peptide=peptide)
 
+
+
+
+# -------------------- Compare --------------------
+def compute_compare_scores(peptide):
+    """
+    Lightweight 1–5 scores for visuals (not medical advice; purely UX).
+    These are heuristic and based only on fields present in your database.
+    """
+    # Convenience: lower frequency and oral route are generally "easier"
+    freq = getattr(peptide, "frequency_per_day", None) or 0
+    route = getattr(peptide, "primary_route", None)
+    storage = getattr(peptide, "storage_method", None)
+    has_links = bool((getattr(peptide, "research_links", None) or "").strip())
+    has_notes = bool((getattr(peptide, "notes", None) or "").strip())
+
+    # Evidence score
+    evidence = 2
+    if has_links:
+        evidence += 2
+    if has_notes:
+        evidence += 1
+    evidence = max(1, min(5, evidence))
+
+    # Convenience score (higher is easier)
+    if freq <= 0:
+        convenience = 3
+    elif freq == 1:
+        convenience = 5
+    elif freq == 2:
+        convenience = 4
+    elif freq == 3:
+        convenience = 3
+    else:
+        convenience = 2
+
+    if route is not None and getattr(route, "value", "") == "oral":
+        convenience = min(5, convenience + 1)
+    if storage is not None and getattr(storage, "value", "") == "freezer":
+        convenience = max(1, convenience - 1)
+
+    # Complexity score (higher = more complex)
+    complexity = 3
+    if freq >= 3:
+        complexity += 1
+    if storage is not None and getattr(storage, "value", "") == "freezer":
+        complexity += 1
+    if route is not None and getattr(route, "value", "") in ("intramuscular",):
+        complexity += 1
+    complexity = max(1, min(5, complexity))
+
+    # Cost score is unknown; use neutral with slight penalty if frequent
+    cost = 3
+    if freq >= 3:
+        cost = 4
+    cost = max(1, min(5, cost))
+
+    return {
+        "evidence": evidence,
+        "convenience": convenience,
+        "complexity": complexity,
+        "cost": cost,
+    }
+
+
+@app.route('/compare')
+@login_required
+def compare():
+    """
+    Compare 2–4 peptides side-by-side.
+    Example: /compare?ids=1,2,3
+    """
+    ids_raw = (request.args.get('ids') or '').strip()
+    if not ids_raw:
+        flash('Select 2–4 peptides to compare.', 'warning')
+        return redirect(url_for('peptides'))
+
+    try:
+        ids = [int(x) for x in ids_raw.split(',') if x.strip().isdigit()]
+    except Exception:
+        ids = []
+
+    # Keep it clean: 2–4 items
+    ids = ids[:4]
+    if len(ids) < 2:
+        flash('Select at least 2 peptides to compare.', 'warning')
+        return redirect(url_for('peptides'))
+
+    db_session = get_session(db_url)
+    peptides_selected = db_session.query(Peptide).filter(Peptide.id.in_(ids)).all()
+    db_session.close()
+
+    # Preserve user selection order
+    by_id = {p.id: p for p in peptides_selected}
+    peptides_selected = [by_id[i] for i in ids if i in by_id]
+
+    compare_items = []
+    chart_series = []
+
+    for p in peptides_selected:
+        scores = compute_compare_scores(p)
+        slug = slugify_name(p.name)
+        image_url = url_for('static', filename=f'img/peptides/{slug}.png')
+        compare_items.append({
+            "id": p.id,
+            "name": p.name,
+            "common_name": getattr(p, "common_name", "") or "",
+            "primary_benefits": getattr(p, "primary_benefits", "") or "",
+            "primary_route": getattr(p.primary_route, "value", "") if getattr(p, "primary_route", None) else "",
+            "storage_method": getattr(p.storage_method, "value", "") if getattr(p, "storage_method", None) else "",
+            "frequency_per_day": getattr(p, "frequency_per_day", None),
+            "half_life_hours": getattr(p, "half_life_hours", None),
+            "typical_dose_min": getattr(p, "typical_dose_min", None),
+            "typical_dose_max": getattr(p, "typical_dose_max", None),
+            "notes": getattr(p, "notes", "") or "",
+            "research_links": getattr(p, "research_links", "") or "",
+            "scores": scores,
+            "image_url": image_url,
+        })
+        chart_series.append({
+            "label": p.name,
+            "data": [scores["evidence"], scores["convenience"], scores["cost"], scores["complexity"]],
+        })
+
+    # These labels match the order above
+    chart_labels = ["Evidence", "Convenience", "Cost", "Complexity"]
+
+    return render_template(
+        'compare.html',
+        items=compare_items,
+        chart_labels=chart_labels,
+        chart_series=chart_series,
+    )
 
 
 # -------------------- Chat --------------------
