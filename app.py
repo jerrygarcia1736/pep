@@ -250,6 +250,57 @@ def peptide_detail(peptide_id):
     return render_template('peptide_detail.html', peptide=peptide, research=research)
 
 
+@app.route('/compare')
+@login_required
+def compare():
+    """Compare peptides side by side"""
+    # Get peptide IDs from query params (e.g., ?ids=1,2,3,4)
+    peptide_ids_param = request.args.get('ids', '')
+    
+    db_session = get_session(db_url)
+    db = PeptideDB(db_session)
+    
+    # If no IDs specified, get first 4 peptides as defaults
+    if peptide_ids_param:
+        peptide_ids = [int(id.strip()) for id in peptide_ids_param.split(',') if id.strip().isdigit()]
+        items = [db.get_peptide(pid) for pid in peptide_ids if db.get_peptide(pid)]
+    else:
+        # Default: show first 4 peptides
+        all_peptides = db.list_peptides()
+        items = all_peptides[:4] if len(all_peptides) >= 4 else all_peptides
+    
+    # Calculate comparison scores (heuristic for UI)
+    for item in items:
+        item.scores = {
+            'evidence': 4 if item.research_links else 2,
+            'convenience': 5 if item.primary_route and 'subcutaneous' in str(item.primary_route.value).lower() else 3,
+            'cost': 3,  # Default middle score
+            'complexity': 2 if item.frequency_per_day and item.frequency_per_day == 1 else 4
+        }
+    
+    # Prepare chart data for radar comparison
+    chart_labels = ['Evidence', 'Convenience', 'Cost', 'Complexity']
+    chart_series = [
+        {
+            'label': item.name,
+            'data': [
+                item.scores['evidence'],
+                item.scores['convenience'],
+                item.scores['cost'],
+                item.scores['complexity']
+            ]
+        }
+        for item in items
+    ]
+    
+    db_session.close()
+    
+    return render_template('compare.html', 
+                         items=items,
+                         chart_labels=chart_labels,
+                         chart_series=chart_series)
+
+
 @app.route('/calculator', methods=['GET', 'POST'])
 @login_required
 def calculator():

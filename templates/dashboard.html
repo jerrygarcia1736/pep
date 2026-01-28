@@ -116,8 +116,8 @@
       <div class="col-12 col-lg-6">
         <div class="d-flex align-items-center justify-content-between mb-2">
           <div class="fw-semibold">Suggested "start here" list</div>
-          <span class="badge bg-warning text-dark">
-            <i class="bi bi-star-fill"></i> Paid Version Only
+          <span class="badge bg-warning text-dark px-3 py-2" style="font-size: 1rem;">
+            <i class="bi bi-star-fill" style="font-size: 1.2rem;"></i> Paid Version Only
           </span>
         </div>
         <div class="list-group mt-2" id="recoList">
@@ -306,20 +306,18 @@
     }
   }
 
-  function debounceLoad() {
+  function updateAgeBadge() {
     const age = slider.value;
     badge.textContent = age;
-    if (t) clearTimeout(t);
-    t = setTimeout(() => load(age), 200);
+    // Premium feature - don't load recommendations
   }
 
-  slider.addEventListener("input", debounceLoad);
+  slider.addEventListener("input", updateAgeBadge);
 
   // Recompute when goals change
   document.querySelectorAll(".goalToggle").forEach((el) => {
     el.addEventListener("change", () => {
       // Premium feature - don't actually load
-      // load(slider.value);
     });
   });
 
