@@ -34,6 +34,28 @@ from nutrition_api import register_nutrition_routes
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
+# ----------------------------
+# Helpers
+# ----------------------------
+def has_endpoint(name: str) -> bool:
+    """Return True if a Flask endpoint exists.
+
+    NOTE: This must be module-level so it can be used both in templates (via context processor)
+    and inside route functions (e.g., scan_nutrition)."""
+    try:
+        return name in app.view_functions
+    except Exception:
+        return False
+
+
+def register_route(rule: str, endpoint: str, view_func, **options):
+    """Idempotent route registration to prevent duplicate endpoint crashes."""
+    if endpoint in app.view_functions:
+        return
+    app.add_url_rule(rule, endpoint=endpoint, view_func=view_func, **options)
+
+
+
 # Jinja filter for parsing JSON in templates
 @app.template_filter('from_json')
 def from_json_filter(value):
@@ -1793,178 +1815,6 @@ def calculator():
 @app.route("/peptide-calculator", methods=["GET", "POST"])
 @login_required
 @require_onboarding
-
-# ----------------------------
-# Syringe Check (Dose + BAC verification)
-# ----------------------------
-
-@app.route("/syringe-check")
-@login_required
-def syringe_check():
-    """UI tool to help users sanity-check syringe draws against protocol + vial reconstitution."""
-    try:
-        from database import PeptideDB  # type: ignore
-        db = get_session(db_url)
-        try:
-            pdb = PeptideDB(db)
-            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
-            vials = getattr(pdb, "list_active_vials", lambda: [])()
-        finally:
-            db.close()
-    except Exception:
-        app.logger.exception("Failed to load protocols/vials for syringe check")
-        protocols, vials = [], []
-
-    return render_if_exists(
-        "syringe_check.html",
-        fallback_endpoint="dashboard",
-        protocols=protocols,
-        vials=vials,
-        title="Syringe Check",
-    )
-
-
-
-@app.route("/syringe-check/camera")
-@login_required
-def syringe_check_camera():
-    """Camera-assisted syringe measurement (client-side calibration)."""
-    try:
-        from database import PeptideDB  # type: ignore
-        db = get_session(db_url)
-        try:
-            pdb = PeptideDB(db)
-            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
-            vials = getattr(pdb, "list_active_vials", lambda: [])()
-        finally:
-            db.close()
-    except Exception:
-        app.logger.exception("Failed to load protocols/vials for syringe camera check")
-        protocols, vials = [], []
-
-    return render_if_exists(
-        "syringe_check_camera.html",
-        fallback_endpoint="syringe_check",
-        protocols=protocols,
-        vials=vials,
-        title="Syringe Camera Check",
-    )
-
-
-
-
-@app.route("/api/syringe-check/expected")
-@login_required
-def api_syringe_check_expected():
-    """Return expected draw amounts based on a protocol and vial.
-
-    Query params:
-      - protocol_id (optional)
-      - vial_id (optional)
-      - dose_mcg (optional override)
-      - water_ml (optional override for reconstitution target)
-    """
-    protocol_id = (request.args.get("protocol_id") or "").strip()
-    vial_id = (request.args.get("vial_id") or "").strip()
-    dose_mcg_override = (request.args.get("dose_mcg") or "").strip()
-    water_ml_override = (request.args.get("water_ml") or "").strip()
-
-    protocol = None
-    vial = None
-
-    try:
-        from database import PeptideDB  # type: ignore
-        db = get_session(db_url)
-        try:
-            pdb = PeptideDB(db)
-
-            # Fetch protocol/vial using best-available helpers
-            if protocol_id:
-                getp = getattr(pdb, "get_protocol", None) or getattr(pdb, "get_protocol_by_id", None)
-                if callable(getp):
-                    protocol = getp(int(protocol_id))
-                else:
-                    # fallback: scan active protocols
-                    for p in getattr(pdb, "list_active_protocols", lambda: [])():
-                        if getattr(p, "id", None) == int(protocol_id):
-                            protocol = p
-                            break
-
-            if vial_id:
-                getv = getattr(pdb, "get_vial", None) or getattr(pdb, "get_vial_by_id", None)
-                if callable(getv):
-                    vial = getv(int(vial_id))
-                else:
-                    for v in getattr(pdb, "list_active_vials", lambda: [])():
-                        if getattr(v, "id", None) == int(vial_id):
-                            vial = v
-                            break
-        finally:
-            db.close()
-    except Exception:
-        app.logger.exception("Failed to load protocol/vial in syringe expected API")
-
-    # Extract basics
-    dose_mcg = None
-    try:
-        if dose_mcg_override:
-            dose_mcg = float(dose_mcg_override)
-    except Exception:
-        dose_mcg = None
-
-    if dose_mcg is None and protocol is not None:
-        try:
-            dose_mcg = float(getattr(protocol, "dose_mcg", None))
-        except Exception:
-            dose_mcg = None
-
-    mg_amount = None
-    water_ml = None
-    try:
-        if vial is not None:
-            mg_amount = float(getattr(vial, "mg_amount", None))
-    except Exception:
-        mg_amount = None
-
-    # Water ml stored as bacteriostatic_water_ml
-    try:
-        if water_ml_override:
-            water_ml = float(water_ml_override)
-        elif vial is not None:
-            water_ml = float(getattr(vial, "bacteriostatic_water_ml", None))
-    except Exception:
-        water_ml = None
-
-    # Compute
-    mg_per_ml = None
-    mcg_per_ml = None
-    expected_volume_ml = None
-    expected_units_u100 = None
-
-    if mg_amount and water_ml and water_ml > 0:
-        mg_per_ml = mg_amount / water_ml
-        mcg_per_ml = mg_per_ml * 1000.0
-
-    if dose_mcg and mcg_per_ml and mcg_per_ml > 0:
-        expected_volume_ml = dose_mcg / mcg_per_ml
-        # U-100 insulin syringes: 1.0 mL = 100 units
-        expected_units_u100 = expected_volume_ml * 100.0
-
-    return jsonify(
-        {
-            "protocol_id": int(protocol_id) if protocol_id.isdigit() else None,
-            "vial_id": int(vial_id) if vial_id.isdigit() else None,
-            "dose_mcg": dose_mcg,
-            "vial_mg_amount": mg_amount,
-            "water_ml": water_ml,
-            "mg_per_ml": mg_per_ml,
-            "mcg_per_ml": mcg_per_ml,
-            "expected_volume_ml": expected_volume_ml,
-            "expected_units_u100": expected_units_u100,
-        }
-    )
-
-
 def peptide_calculator():
     """
     Peptide Calculator:
@@ -2387,6 +2237,146 @@ def upgrade():
 # -----------------------------------------------------------------------------
 # Run
 # -----------------------------------------------------------------------------
+
+
+# ----------------------------
+# Syringe Check (Dose + BAC verification) — idempotent registration
+# ----------------------------
+def _syringe_check():
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
+            vials = getattr(pdb, "list_active_vials", lambda: [])()
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocols/vials for syringe check")
+        protocols, vials = [], []
+    return render_if_exists("syringe_check.html", fallback_endpoint="dashboard", protocols=protocols, vials=vials, title="Syringe Check")
+
+
+def _syringe_check_camera():
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
+            vials = getattr(pdb, "list_active_vials", lambda: [])()
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocols/vials for syringe camera check")
+        protocols, vials = [], []
+    return render_if_exists("syringe_check_camera.html", fallback_endpoint="syringe_check", protocols=protocols, vials=vials, title="Syringe Camera Check")
+
+
+def _api_syringe_expected():
+    protocol_id = (request.args.get("protocol_id") or "").strip()
+    vial_id = (request.args.get("vial_id") or "").strip()
+    dose_mcg_override = (request.args.get("dose_mcg") or "").strip()
+    water_ml_override = (request.args.get("water_ml") or "").strip()
+
+    protocol = None
+    vial = None
+
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+
+            if protocol_id:
+                getp = getattr(pdb, "get_protocol", None) or getattr(pdb, "get_protocol_by_id", None)
+                if callable(getp):
+                    protocol = getp(int(protocol_id))
+                else:
+                    for p in getattr(pdb, "list_active_protocols", lambda: [])():
+                        if getattr(p, "id", None) == int(protocol_id):
+                            protocol = p
+                            break
+
+            if vial_id:
+                getv = getattr(pdb, "get_vial", None) or getattr(pdb, "get_vial_by_id", None)
+                if callable(getv):
+                    vial = getv(int(vial_id))
+                else:
+                    for v in getattr(pdb, "list_active_vials", lambda: [])():
+                        if getattr(v, "id", None) == int(vial_id):
+                            vial = v
+                            break
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocol/vial in syringe expected API")
+
+    dose_mcg = None
+    try:
+        if dose_mcg_override:
+            dose_mcg = float(dose_mcg_override)
+    except Exception:
+        dose_mcg = None
+
+    if dose_mcg is None and protocol is not None:
+        try:
+            dose_mcg = float(getattr(protocol, "dose_mcg", None))
+        except Exception:
+            dose_mcg = None
+
+    mg_amount = None
+    try:
+        if vial is not None:
+            mg_amount = float(getattr(vial, "mg_amount", None))
+    except Exception:
+        mg_amount = None
+
+    water_ml = None
+    try:
+        if water_ml_override:
+            water_ml = float(water_ml_override)
+        elif vial is not None:
+            water_ml = float(getattr(vial, "bacteriostatic_water_ml", None))
+    except Exception:
+        water_ml = None
+
+    mg_per_ml = None
+    mcg_per_ml = None
+    expected_volume_ml = None
+    expected_units_u100 = None
+
+    if mg_amount and water_ml and water_ml > 0:
+        mg_per_ml = mg_amount / water_ml
+        mcg_per_ml = mg_per_ml * 1000.0
+
+    if dose_mcg and mcg_per_ml and mcg_per_ml > 0:
+        expected_volume_ml = dose_mcg / mcg_per_ml
+        expected_units_u100 = expected_volume_ml * 100.0
+
+    return jsonify(
+        {
+            "protocol_id": int(protocol_id) if protocol_id.isdigit() else None,
+            "vial_id": int(vial_id) if vial_id.isdigit() else None,
+            "dose_mcg": dose_mcg,
+            "vial_mg_amount": mg_amount,
+            "water_ml": water_ml,
+            "mg_per_ml": mg_per_ml,
+            "mcg_per_ml": mcg_per_ml,
+            "expected_volume_ml": expected_volume_ml,
+            "expected_units_u100": expected_units_u100,
+        }
+    )
+
+
+# Register routes only if they don't already exist
+if "login_required" in globals():
+    register_route("/syringe-check", "syringe_check", login_required(_syringe_check))
+    register_route("/syringe-check/camera", "syringe_check_camera", login_required(_syringe_check_camera))
+    register_route("/api/syringe-check/expected", "api_syringe_check_expected", login_required(_api_syringe_expected))
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_ENV") == "development"
