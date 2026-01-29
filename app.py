@@ -46,6 +46,7 @@ class User(ModelBase):
     password_hash = Column(String(255), nullable=False)
     tier = Column(String(20), nullable=False, default="free")  # free | tier1 | tier2 | admin
     created_at = Column(DateTime, default=datetime.utcnow)
+    agreement_accepted_at = Column(DateTime, nullable=True)  # NULL = not accepted yet
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
@@ -130,6 +131,17 @@ def login_required(f):
         if "user_id" not in session:
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
+        
+        # Check if user has accepted agreement
+        db = get_session(db_url)
+        try:
+            user = db.query(User).filter_by(id=session["user_id"]).first()
+            if user and not user.agreement_accepted_at:
+                # User hasn't accepted agreement yet - redirect to it
+                return redirect(url_for("user_agreement"))
+        finally:
+            db.close()
+        
         return f(*args, **kwargs)
     return wrapper
 
@@ -206,112 +218,6 @@ def _compute_dashboard_context() -> Tuple[Dict[str, Any], List[Any], List[Any]]:
         print(f"Dashboard context fallback (non-fatal): {e}")
 
     return stats, protocols, recent_injections
-
-
-# -----------------------------------------------------------------------------
-# Shared loader: peptides list for forms (best-effort)
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Peptide seeding (ensures dropdowns have options on fresh DBs)
-# -----------------------------------------------------------------------------
-DEFAULT_PEPTIDES: list[tuple[str, str]] = [
-    ("BPC-157", "Body Protection Compound-157"),
-    ("TB-500", "Thymosin Beta-4"),
-    ("Epitalon", "Epithalon"),
-    ("GHK-Cu", "Copper Peptide (GHK-Cu)"),
-    ("KPV", "KPV"),
-    ("DSIP", "Delta Sleep-Inducing Peptide"),
-    ("CJC-1295", "CJC-1295"),
-    ("Ipamorelin", "Ipamorelin"),
-    ("Selank", "Selank"),
-    ("Semax", "Semax"),
-    ("MT2", "Melanotan II (MT2)"),
-    ("PT-141", "Bremelanotide (PT-141)"),
-    ("Thymosin Alpha-1", "Thymosin Alpha-1 (TA-1)"),
-    ("MOTS-c", "MOTS-c"),
-    ("SS-31", "Elamipretide (SS-31)"),
-    ("AOD-9604", "AOD-9604"),
-    ("Tesamorelin", "Tesamorelin"),
-    ("Sermorelin", "Sermorelin"),
-    ("GHRP-2", "GHRP-2"),
-    ("GHRP-6", "GHRP-6"),
-    ("Hexarelin", "Hexarelin"),
-    ("BPC-157 (Oral)", "BPC-157 (Oral)"),
-    ("NAD+", "NAD+"),
-    ("Glutathione", "Glutathione"),
-    ("Melatonin", "Melatonin"),
-    ("IGF-1 LR3", "IGF-1 LR3"),
-    ("PEG-MGF", "PEG-MGF"),
-    ("Follistatin-344", "Follistatin-344"),
-    ("Kisspeptin-10", "Kisspeptin-10"),
-    ("TB-4 Frag", "Thymosin Beta-4 Fragment"),
-    ("B7-33", "Relaxin-2 analog (B7-33)"),
-    ("ARA-290", "ARA-290"),
-    ("LL-37", "LL-37"),
-    ("Bremelanotide", "Bremelanotide"),
-    ("Oxytocin", "Oxytocin"),
-    ("DSIP (Alt)", "DSIP"),
-    ("KPV (Alt)", "KPV"),
-    ("Epithalon", "Epitalon / Epithalon"),
-    ("Thymalin", "Thymalin"),
-]
-
-def _seed_peptides_if_empty(pdb) -> None:
-    """Seed a baseline peptide list on fresh databases.
-
-    Safe to call repeatedly; does nothing if peptides already exist.
-    """
-    try:
-        existing = getattr(pdb, "list_peptides", lambda: [])()
-        if existing:
-            return
-        add_fn = getattr(pdb, "add_peptide", None)
-        if not callable(add_fn):
-            return
-        for name, common_name in DEFAULT_PEPTIDES:
-            try:
-                add_fn(name=name, common_name=common_name)
-            except Exception:
-                # Ignore duplicates / constraint errors
-                continue
-    except Exception:
-        # Never block the app for seeding issues
-        app.logger.exception("Peptide seeding failed (non-fatal).")
-
-def _load_peptides_list() -> list[Any]:
-    """Return peptides from DB (and seed defaults on a fresh DB).
-
-    This powers dropdowns like Add Vial / Add Protocol.
-    """
-    try:
-        from database import PeptideDB  # type: ignore
-        db = get_session(db_url)
-        try:
-            pdb = PeptideDB(db)
-            _seed_peptides_if_empty(pdb)
-            return getattr(pdb, "list_peptides", lambda: [])()
-        finally:
-            db.close()
-    except Exception as e:
-        app.logger.info("Could not load peptides list (non-fatal): %s", e)
-        return []
-
-# -----------------------------------------------------------------------------
-# Protocol templates (names + metadata only; user sets dosing)
-# -----------------------------------------------------------------------------
-PROTOCOL_TEMPLATES: dict[str, dict[str, str]] = {
-    "bpc157": {"name": "BPC-157", "protocol_name": "BPC-157 Healing Protocol"},
-    "tb500": {"name": "TB-500", "protocol_name": "TB-500 Recovery Protocol"},
-    "epitalon": {"name": "Epitalon", "protocol_name": "Epitalon Sleep & Longevity Protocol"},
-    "ghkcu": {"name": "GHK-Cu", "protocol_name": "GHK-Cu Skin & Repair Protocol"},
-    "mt2": {"name": "MT2", "protocol_name": "MT2 Tanning Protocol"},
-    "kpv": {"name": "KPV", "protocol_name": "KPV Protocol"},
-    "dsip": {"name": "DSIP", "protocol_name": "DSIP Protocol"},
-    "cjc1295": {"name": "CJC-1295", "protocol_name": "CJC-1295 Protocol"},
-    "ipamorelin": {"name": "Ipamorelin", "protocol_name": "Ipamorelin Protocol"},
-    "selank": {"name": "Selank", "protocol_name": "Selank Protocol"},
-}
-
 
 # -----------------------------------------------------------------------------
 # Core routes
@@ -498,6 +404,51 @@ def reset_password(token):
         db.close()
 
 # -----------------------------------------------------------------------------
+# Legal Pages and User Agreement
+# -----------------------------------------------------------------------------
+@app.route("/terms-of-service")
+def terms_of_service():
+    """Terms of Service page"""
+    return render_if_exists("terms_of_service.html", fallback_endpoint="dashboard")
+
+
+@app.route("/medical-disclaimer")
+def medical_disclaimer():
+    """Medical Disclaimer page"""
+    return render_if_exists("medical_disclaimer.html", fallback_endpoint="dashboard")
+
+
+@app.route("/user-agreement")
+@login_required
+def user_agreement():
+    """User agreement that must be accepted before using the app"""
+    # Don't check for agreement in this route (would cause infinite loop)
+    return render_template("user_agreement.html")
+
+
+@app.route("/accept-agreement", methods=["POST"])
+def accept_agreement():
+    """Process user agreement acceptance"""
+    if "user_id" not in session:
+        flash("Please log in.", "warning")
+        return redirect(url_for("login"))
+    
+    db = get_session(db_url)
+    try:
+        user = db.query(User).filter_by(id=session["user_id"]).first()
+        if user:
+            # Mark agreement as accepted with timestamp
+            user.agreement_accepted_at = datetime.utcnow()
+            db.commit()
+            flash("Agreement accepted. Welcome to PeptideTracker.ai!", "success")
+            return redirect(url_for("dashboard"))
+    finally:
+        db.close()
+    
+    flash("Error processing agreement.", "error")
+    return redirect(url_for("user_agreement"))
+
+# -----------------------------------------------------------------------------
 # Stub endpoints to prevent BuildError
 # -----------------------------------------------------------------------------
 @app.route("/log-injection", methods=["GET", "POST"])
@@ -511,142 +462,18 @@ def log_injection():
 @app.route("/add-vial", methods=["GET", "POST"])
 @login_required
 def add_vial():
-    peptides = _load_peptides_list()
-
     if request.method == "POST":
-        peptide_id = (request.form.get("peptide_id") or "").strip()
-        mg_amount = (request.form.get("mg_amount") or "").strip()
-        vendor = (request.form.get("vendor") or "").strip()
-        lot_number = (request.form.get("lot_number") or "").strip()
-        reconstitute = (request.form.get("reconstitute") or "no").strip()
-        ml_water = (request.form.get("ml_water") or "").strip()
-        reconstitution_date_str = (request.form.get("reconstitution_date") or "").strip()
-
-        if not peptide_id or not mg_amount:
-            flash("Please select a peptide and enter the vial amount (mg).", "warning")
-            return render_if_exists("add_vial.html", fallback_endpoint="dashboard", peptides=peptides)
-
-        try:
-            from database import PeptideDB  # type: ignore
-
-            db = get_session(db_url)
-            try:
-                pdb = PeptideDB(db)
-                # Ensure peptides exist (fresh DB on Render)
-                _seed_peptides_if_empty(pdb)
-
-                add_fn = getattr(pdb, "add_vial", None)
-                if not callable(add_fn):
-                    raise RuntimeError("Database helper does not implement add_vial().")
-
-                purchase_date = datetime.utcnow()
-                if reconstitute == "yes":
-                    if reconstitution_date_str:
-                        # datetime-local comes in as "YYYY-MM-DDTHH:MM" (no timezone)
-                        reconstitution_date = datetime.fromisoformat(reconstitution_date_str)
-                    else:
-                        reconstitution_date = datetime.utcnow()
-                else:
-                    reconstitution_date = None
-                bacteriostatic_water_ml = float(ml_water) if ml_water else None
-
-                add_fn(
-                    peptide_id=int(peptide_id),
-                    mg_amount=float(mg_amount),
-                    bacteriostatic_water_ml=bacteriostatic_water_ml,
-                    purchase_date=purchase_date,
-                    reconstitution_date=reconstitution_date,
-                    lot_number=lot_number or None,
-                    vendor=vendor or None,
-                    cost=None,
-                    notes=None,
-                )
-                db.commit()
-                flash("Vial added.", "success")
-                return redirect(url_for("vials"))
-            finally:
-                db.close()
-
-        except Exception as e:
-            app.logger.exception("Failed to add vial")
-            flash(f"Could not add vial: {e}", "error")
-            return render_if_exists("add_vial.html", fallback_endpoint="dashboard", peptides=peptides)
-
-    return render_if_exists("add_vial.html", fallback_endpoint="dashboard", peptides=peptides)
-
-
+        flash("add_vial is not wired yet (stub).", "info")
+        return redirect(url_for("dashboard"))
+    return render_if_exists("add_vial.html", fallback_endpoint="dashboard")
 
 @app.route("/add-protocol", methods=["GET", "POST"])
 @login_required
 def add_protocol():
-    peptides = _load_peptides_list()
-
-    # One-click templates: /add-protocol?template=epitalon
-    template_key = (request.args.get("template") or "").strip().lower()
-    template_data = PROTOCOL_TEMPLATES.get(template_key)
-
     if request.method == "POST":
-        protocol_name = (request.form.get("protocol_name") or "").strip()
-        peptide_id = (request.form.get("peptide_id") or "").strip()
-        dose_mcg = (request.form.get("dose_mcg") or "").strip()
-        frequency_per_day = (request.form.get("frequency_per_day") or "").strip()
-        notes = (request.form.get("notes") or "").strip()
-
-        if not protocol_name:
-            flash("Protocol name is required.", "warning")
-            return render_if_exists(
-                "add_protocol.html",
-                fallback_endpoint="dashboard",
-                peptides=peptides,
-                template_key=template_key,
-                template_data=template_data,
-                form=request.form,
-            )
-
-        # Best-effort: persist via your project's DB helper if available.
-        try:
-            from database import PeptideDB  # type: ignore
-
-            db = get_session(db_url)
-            try:
-                pdb = PeptideDB(db)
-                create_fn = getattr(pdb, "create_protocol", None) or getattr(pdb, "add_protocol", None)
-                if callable(create_fn):
-                    create_fn(                        name=protocol_name,
-                        peptide_id=int(peptide_id) if peptide_id else None,
-                        dose_mcg=float(dose_mcg) if dose_mcg else None,
-                        frequency_per_day=int(frequency_per_day) if frequency_per_day else None,
-                        notes=notes or None,
-                    )
-                    db.commit()
-                    flash("Protocol created.", "success")
-                    return redirect(url_for("protocols"))
-            finally:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-        except Exception:
-            app.logger.exception("add_protocol persistence not available; using stub fallback.")
-
-        flash("Protocol form submitted, but persistence is not wired yet.", "info")
+        flash("add_protocol is not wired yet (stub).", "info")
         return redirect(url_for("dashboard"))
-
-    # Pre-fill fields from template if present.
-    prefill = {
-        "protocol_name": template_data.get("protocol_name") if template_data else "",
-        "peptide_common": template_data.get("name") if template_data else "",
-    }
-
-    return render_if_exists(
-        "add_protocol.html",
-        fallback_endpoint="dashboard",
-        peptides=peptides,
-        template_key=template_key,
-        template_data=template_data,
-        prefill=prefill,
-    )
-
+    return render_if_exists("add_protocol.html", fallback_endpoint="dashboard")
 
 @app.route("/protocols/<int:protocol_id>")
 @login_required
@@ -742,7 +569,9 @@ def log_food():
                     # Save to database
                     db = get_session(db_url)
                     try:
-                        food_log = FoodLog(                            description=food_description,
+                        food_log = FoodLog(
+                            user_id=session["user_id"],
+                            description=food_description,
                             total_calories=total_calories,
                             total_protein_g=total_protein,
                             total_fat_g=total_fat,
@@ -812,7 +641,9 @@ def api_log_food():
         
         db = get_session(db_url)
         try:
-            food_log = FoodLog(                description=description,
+            food_log = FoodLog(
+                user_id=session["user_id"],
+                description=description,
                 total_calories=total_calories,
                 total_protein_g=total_protein_g,
                 total_fat_g=total_fat_g,
@@ -841,85 +672,7 @@ def api_log_food():
 @app.route("/peptides")
 @login_required
 def peptides():
-    """Peptide library page.
-
-    The template expects a `peptides` iterable (and optionally `peptides_json`).
-    If your DB helper is unavailable, we still render the page with an empty list.
-    """
-    peptides_list: list[Any] = []
-    peptides_json: str = "[]"
-
-    try:
-        from database import PeptideDB  # type: ignore
-
-        db = get_session(db_url)
-        pdb = PeptideDB(db)
-        peptides_list = getattr(pdb, "list_peptides", lambda: [])()
-    except Exception:
-        app.logger.exception("Failed to load peptides from DB")
-
-    try:
-        payload = []
-        for p in peptides_list:
-            payload.append(
-                {
-                    "id": getattr(p, "id", None),
-                    "name": getattr(p, "name", ""),
-                    "category": getattr(p, "category", None),
-                    "summary": getattr(p, "summary", "") or getattr(p, "description", "") or "",
-                    "benefits": getattr(p, "benefits", "") or "",
-                    # Optional gating fields if present in your DB model
-                    "locked": bool(getattr(p, "locked", False) or getattr(p, "is_locked", False)),
-                    "tier": getattr(p, "tier", None),
-                }
-            )
-        peptides_json = json.dumps(payload)
-    except Exception:
-        app.logger.exception("Failed to serialize peptides")
-        peptides_json = "[]"
-
-    return render_if_exists(
-        "peptides.html",
-        peptides=peptides_list,
-        peptides_json=peptides_json,
-        fallback_endpoint="dashboard",
-    )
-
-@app.route("/api/peptides")
-@login_required
-def api_peptides():
-    """JSON API used by the Peptides page/compare UI."""
-    try:
-        from database import PeptideDB  # type: ignore
-
-        db = get_session(db_url)
-        pdb = PeptideDB(db)
-        peptides_list = getattr(pdb, "list_peptides", lambda: [])()
-    except Exception:
-        app.logger.exception("Failed to load peptides for API")
-        peptides_list = []
-
-    payload = []
-    for p in peptides_list:
-        payload.append(
-            {
-                "id": getattr(p, "id", None),
-                "name": getattr(p, "name", ""),
-                "category": getattr(p, "category", None),
-                "summary": getattr(p, "summary", "") or getattr(p, "description", "") or "",
-                "benefits": getattr(p, "benefits", "") or "",
-                "locked": bool(getattr(p, "locked", False) or getattr(p, "is_locked", False)),
-                "tier": getattr(p, "tier", None),
-            }
-        )
-    return jsonify(payload)
-
-# Backwards-compatible alias in case templates still reference url_for('pep_ai')
-@app.route("/pep-ai")
-@login_required
-def pep_ai():
-    return redirect(url_for("chat"))
-
+    return render_if_exists("peptides.html", fallback_endpoint="dashboard")
 
 @app.route("/calculator")
 @login_required
@@ -927,69 +680,11 @@ def calculator():
     """Legacy route - redirects to peptide-calculator"""
     return redirect(url_for("peptide_calculator"))
 
-@app.route("/peptide-calculator", methods=["GET", "POST"])
+@app.route("/peptide-calculator")
 @login_required
 def peptide_calculator():
-    """
-    Peptide Calculator:
-    - GET: show calculator UI
-    - POST: (optional) save a protocol using the entered values
-    """
-
-    # Prefer the project's DB helper if available; otherwise fall back to a safe empty list
-    peptides = _load_peptides_list()
-
-    if request.method == "POST":
-        action = (request.form.get("action") or "").strip()
-        if action == "save_protocol":
-            try:
-                from database import PeptideDB  # type: ignore
-
-                db_session = get_session(db_url)
-                try:
-                    pdb = PeptideDB(db_session)
-
-                    peptide_id = int(request.form.get("peptide_id") or 0)
-                    protocol_name = (request.form.get("protocol_name") or "").strip() or "New Protocol"
-                    desired_dose_mcg = float(request.form.get("desired_dose_mcg") or 0)
-                    injections_per_day = int(request.form.get("injections_per_day") or 1)
-
-                    vial_size_mg = (request.form.get("vial_size_mg") or "").strip()
-                    water_ml = (request.form.get("water_ml") or "").strip()
-
-                    notes_bits = []
-                    if vial_size_mg:
-                        notes_bits.append(f"Vial size: {vial_size_mg} mg")
-                    if water_ml:
-                        notes_bits.append(f"Bacteriostatic water: {water_ml} ml")
-                    notes_bits.append("Saved from Peptide Calculator.")
-                    notes = " • ".join([b for b in notes_bits if b])
-
-                    create_fn = getattr(pdb, "create_protocol", None) or getattr(pdb, "add_protocol", None)
-                    if not callable(create_fn):
-                        raise RuntimeError("Database helper does not implement create_protocol()/add_protocol().")
-
-                    create_fn(
-                        peptide_id=peptide_id,
-                        name=protocol_name,
-                        dose_mcg=desired_dose_mcg,
-                        frequency_per_day=injections_per_day,
-                        notes=notes,
-                    )
-                    db_session.commit()
-                    flash("Protocol saved.", "success")
-                    return redirect(url_for("protocols"))
-                finally:
-                    try:
-                        db_session.close()
-                    except Exception:
-                        pass
-
-            except Exception as e:
-                app.logger.exception("Could not save protocol from calculator")
-                flash(f"Could not save protocol: {e}", "danger")
-
-    return render_template("calculator.html", peptides=peptides)
+    """Peptide Calculator - NEW route name"""
+    return render_if_exists("calculator.html", fallback_endpoint="dashboard")
 
 @app.route("/protocols")
 @login_required
@@ -1015,6 +710,133 @@ def coaching():
 @login_required
 def chat():
     return render_if_exists("chat.html", fallback_endpoint="dashboard")
+
+# -----------------------------------------------------------------------------
+# Pep AI Chat API with Safe System Prompt
+# -----------------------------------------------------------------------------
+@app.route("/api/chat", methods=["POST"])
+@login_required
+def api_chat():
+    """Chat with Pep AI using legally safe system prompt"""
+    try:
+        data = request.get_json()
+        user_message = data.get("message", "").strip()
+        
+        if not user_message:
+            return jsonify({"error": "Message required"}), 400
+        
+        # Get basic user context (optional - use for filtering education)
+        db = get_session(db_url)
+        user_context = {}
+        try:
+            user = db.query(User).filter_by(id=session["user_id"]).first()
+            if user:
+                user_context = {
+                    "username": user.username,
+                    "tier": user.tier,
+                    "account_age_days": (datetime.utcnow() - user.created_at).days
+                }
+        finally:
+            db.close()
+        
+        # SAFE SYSTEM PROMPT - Legally Protected
+        system_prompt = f"""You are Pep AI, an educational research assistant for PeptideTracker.ai.
+
+CRITICAL LEGAL BOUNDARIES - NEVER VIOLATE:
+1. You are NOT a doctor, nurse, or licensed healthcare provider
+2. You do NOT provide medical advice, diagnosis, or treatment
+3. You do NOT recommend specific doses for individual users
+4. You do NOT interpret symptoms or diagnose conditions
+5. You do NOT prescribe or suggest treatment plans
+6. You ALWAYS direct users to consult healthcare providers for medical decisions
+
+WHAT YOU CAN DO (Educational):
+✓ Explain how peptides work (mechanisms of action)
+✓ Summarize published research studies
+✓ Provide general dosing ranges from research literature
+✓ Compare peptides based on research data
+✓ Help users understand scientific concepts
+✓ Assist with tracking and organizing their data
+✓ Calculate math (e.g., concentration, reconstitution)
+✓ Answer questions about peptide properties
+
+WHAT YOU CANNOT DO:
+✗ Say "You should take X dose" or "I recommend X mcg for you"
+✗ Say "This will cure/treat/fix your condition"
+✗ Interpret their symptoms or side effects medically
+✗ Tell them to start, stop, or change their protocol
+✗ Make decisions for them
+✗ Replace their doctor
+
+USER CONTEXT (for reference only):
+{json.dumps(user_context, indent=2)}
+
+RESPONSE FRAMEWORK:
+
+When asked about dosages:
+❌ BAD: "Based on your weight and goals, you should take 250mcg"
+✅ GOOD: "Research shows BPC-157 is typically studied at 250-500mcg twice daily. These are general ranges from literature. Your healthcare provider can determine the appropriate dose for your specific situation, considering factors like your medical history, current health status, and individual needs."
+
+When asked about starting a peptide:
+❌ BAD: "Yes, you should start BPC-157 for your injury"
+✅ GOOD: "BPC-157 has been studied for tissue repair and recovery. Research suggests it may support healing processes. However, before starting any peptide, you'll want to discuss with your healthcare provider to ensure it's appropriate for your specific situation and to get proper medical oversight."
+
+When asked about side effects or symptoms:
+❌ BAD: "That sounds like X condition, try Y"
+✅ GOOD: "These symptoms should be evaluated by your healthcare provider who can properly assess your situation. They'll be able to determine if this is related to the peptide or something else requiring attention."
+
+MANDATORY DISCLAIMER:
+Include this at the end of EVERY response that discusses peptides, dosing, or protocols:
+
+---
+⚠️ This is educational information from research literature, not medical advice. Always consult your healthcare provider before starting, stopping, or modifying any peptide protocol.
+
+TONE:
+- Friendly and helpful
+- Educational and informative
+- Safety-conscious
+- Encouraging users to work with medical professionals
+- Never dismissive or directive
+
+Remember: Your purpose is to EDUCATE and INFORM, not to PRESCRIBE or DIAGNOSE."""
+        
+        # Call Claude API (no API key needed per your setup)
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01"
+            },
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 1500,
+                "system": system_prompt,
+                "messages": [
+                    {"role": "user", "content": user_message}
+                ]
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            ai_response = response.json()
+            return jsonify({
+                "success": True,
+                "response": ai_response["content"][0]["text"]
+            })
+        else:
+            print(f"Claude API error: {response.status_code} - {response.text}")
+            return jsonify({
+                "success": False,
+                "error": "Failed to get response from AI"
+            }), 500
+        
+    except Exception as e:
+        print(f"Chat error: {e}")
+        return jsonify({
+            "success": False,
+            "error": "Chat service temporarily unavailable"
+        }), 500
 
 # -----------------------------------------------------------------------------
 # Run
