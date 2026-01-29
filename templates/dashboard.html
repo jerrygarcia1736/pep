@@ -11,7 +11,7 @@
     <div class="small">Complete the 2-step profile and acknowledge the educational disclaimer to personalize your experience and enable Pep AI.</div>
   </div>
   <div class="text-nowrap">
-    <a class="btn btn-primary btn-sm" href="{{ url_for('onboarding_step1') if has_endpoint('onboarding_step1') else '/onboarding/step-1' }}">Complete setup</a>
+    <a class="btn btn-primary btn-sm" href="{{ url_for('onboarding_step1') if has_endpoint('onboarding_step1') else (url_for('profile_setup') if has_endpoint('profile_setup') else '/profile-setup') }}">Complete setup</a>
   </div>
 </div>
 {% endif %}
@@ -24,7 +24,7 @@
       <div class="text-muted small">Two quick steps — goals + basics. Helps personalize your dashboard and keeps Pep AI safer.</div>
     </div>
     <div class="text-nowrap">
-      <a class="btn btn-outline-primary btn-sm" href="{{ url_for('onboarding_step1') if has_endpoint('onboarding_step1') else '/onboarding/step-1' }}">
+      <a class="btn btn-outline-primary btn-sm" href="{{ url_for('onboarding_step1') if has_endpoint('onboarding_step1') else (url_for('profile_setup') if has_endpoint('profile_setup') else '/profile-setup') }}">
         Continue setup
       </a>
     </div>
