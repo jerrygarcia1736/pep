@@ -211,13 +211,84 @@ def _compute_dashboard_context() -> Tuple[Dict[str, Any], List[Any], List[Any]]:
 # -----------------------------------------------------------------------------
 # Shared loader: peptides list for forms (best-effort)
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Peptide seeding (ensures dropdowns have options on fresh DBs)
+# -----------------------------------------------------------------------------
+DEFAULT_PEPTIDES: list[tuple[str, str]] = [
+    ("BPC-157", "Body Protection Compound-157"),
+    ("TB-500", "Thymosin Beta-4"),
+    ("Epitalon", "Epithalon"),
+    ("GHK-Cu", "Copper Peptide (GHK-Cu)"),
+    ("KPV", "KPV"),
+    ("DSIP", "Delta Sleep-Inducing Peptide"),
+    ("CJC-1295", "CJC-1295"),
+    ("Ipamorelin", "Ipamorelin"),
+    ("Selank", "Selank"),
+    ("Semax", "Semax"),
+    ("MT2", "Melanotan II (MT2)"),
+    ("PT-141", "Bremelanotide (PT-141)"),
+    ("Thymosin Alpha-1", "Thymosin Alpha-1 (TA-1)"),
+    ("MOTS-c", "MOTS-c"),
+    ("SS-31", "Elamipretide (SS-31)"),
+    ("AOD-9604", "AOD-9604"),
+    ("Tesamorelin", "Tesamorelin"),
+    ("Sermorelin", "Sermorelin"),
+    ("GHRP-2", "GHRP-2"),
+    ("GHRP-6", "GHRP-6"),
+    ("Hexarelin", "Hexarelin"),
+    ("BPC-157 (Oral)", "BPC-157 (Oral)"),
+    ("NAD+", "NAD+"),
+    ("Glutathione", "Glutathione"),
+    ("Melatonin", "Melatonin"),
+    ("IGF-1 LR3", "IGF-1 LR3"),
+    ("PEG-MGF", "PEG-MGF"),
+    ("Follistatin-344", "Follistatin-344"),
+    ("Kisspeptin-10", "Kisspeptin-10"),
+    ("TB-4 Frag", "Thymosin Beta-4 Fragment"),
+    ("B7-33", "Relaxin-2 analog (B7-33)"),
+    ("ARA-290", "ARA-290"),
+    ("LL-37", "LL-37"),
+    ("Bremelanotide", "Bremelanotide"),
+    ("Oxytocin", "Oxytocin"),
+    ("DSIP (Alt)", "DSIP"),
+    ("KPV (Alt)", "KPV"),
+    ("Epithalon", "Epitalon / Epithalon"),
+    ("Thymalin", "Thymalin"),
+]
+
+def _seed_peptides_if_empty(pdb) -> None:
+    """Seed a baseline peptide list on fresh databases.
+
+    Safe to call repeatedly; does nothing if peptides already exist.
+    """
+    try:
+        existing = getattr(pdb, "list_peptides", lambda: [])()
+        if existing:
+            return
+        add_fn = getattr(pdb, "add_peptide", None)
+        if not callable(add_fn):
+            return
+        for name, common_name in DEFAULT_PEPTIDES:
+            try:
+                add_fn(name=name, common_name=common_name)
+            except Exception:
+                # Ignore duplicates / constraint errors
+                continue
+    except Exception:
+        # Never block the app for seeding issues
+        app.logger.exception("Peptide seeding failed (non-fatal).")
+
 def _load_peptides_list() -> list[Any]:
-    """Return peptides from your project's DB helper if available, else an empty list."""
+    """Return peptides from DB (and seed defaults on a fresh DB).
+
+    This powers dropdowns like Add Vial / Add Protocol.
+    """
     try:
         from database import PeptideDB  # type: ignore
         db = get_session(db_url)
         try:
             pdb = PeptideDB(db)
+            _seed_peptides_if_empty(pdb)
             return getattr(pdb, "list_peptides", lambda: [])()
         finally:
             db.close()
@@ -443,7 +514,6 @@ def add_vial():
     peptides = _load_peptides_list()
 
     if request.method == "POST":
-        # Best-effort stub: your project may implement persistence in database.PeptideDB.
         peptide_id = (request.form.get("peptide_id") or "").strip()
         mg_amount = (request.form.get("mg_amount") or "").strip()
         vendor = (request.form.get("vendor") or "").strip()
@@ -451,33 +521,51 @@ def add_vial():
         reconstitute = (request.form.get("reconstitute") or "no").strip()
         ml_water = (request.form.get("ml_water") or "").strip()
 
+        if not peptide_id or not mg_amount:
+            flash("Please select a peptide and enter the vial amount (mg).", "warning")
+            return render_if_exists("add_vial.html", fallback_endpoint="dashboard", peptides=peptides)
+
         try:
             from database import PeptideDB  # type: ignore
 
             db = get_session(db_url)
             try:
                 pdb = PeptideDB(db)
-                create_fn = getattr(pdb, "create_vial", None) or getattr(pdb, "add_vial", None)
-                if callable(create_fn):
-                    create_fn(
-                        user_id=session["user_id"],
-                        peptide_id=int(peptide_id) if peptide_id else None,
-                        mg_amount=float(mg_amount) if mg_amount else None,
-                        vendor=vendor or None,
-                        lot_number=lot_number or None,
-                        reconstitute=(reconstitute == "yes"),
-                        ml_water=float(ml_water) if ml_water else None,
-                    )
-                    db.commit()
-                    flash("Vial added.", "success")
-                    return redirect(url_for("vials"))
-        except Exception:
-            app.logger.exception("add_vial persistence not available; using stub fallback.")
+                # Ensure peptides exist (fresh DB on Render)
+                _seed_peptides_if_empty(pdb)
 
-        flash("Vial form submitted, but persistence is not wired yet.", "info")
-        return redirect(url_for("dashboard"))
+                add_fn = getattr(pdb, "add_vial", None)
+                if not callable(add_fn):
+                    raise RuntimeError("Database helper does not implement add_vial().")
+
+                purchase_date = datetime.utcnow()
+                reconstitution_date = datetime.utcnow() if reconstitute == "yes" else None
+                bacteriostatic_water_ml = float(ml_water) if ml_water else None
+
+                add_fn(
+                    peptide_id=int(peptide_id),
+                    mg_amount=float(mg_amount),
+                    bacteriostatic_water_ml=bacteriostatic_water_ml,
+                    purchase_date=purchase_date,
+                    reconstitution_date=reconstitution_date,
+                    lot_number=lot_number or None,
+                    vendor=vendor or None,
+                    cost=None,
+                    notes=None,
+                )
+                db.commit()
+                flash("Vial added.", "success")
+                return redirect(url_for("vials"))
+            finally:
+                db.close()
+
+        except Exception as e:
+            app.logger.exception("Failed to add vial")
+            flash(f"Could not add vial: {e}", "error")
+            return render_if_exists("add_vial.html", fallback_endpoint="dashboard", peptides=peptides)
 
     return render_if_exists("add_vial.html", fallback_endpoint="dashboard", peptides=peptides)
+
 
 
 @app.route("/add-protocol", methods=["GET", "POST"])
