@@ -44,20 +44,6 @@
           </li>
         {% endif %}
 
-        {# Scan tools (always available to logged-in users once routes exist) #}
-        {% if current_user.is_authenticated %}
-          <li class="nav-item">
-            <a class="nav-link" href="/scan-food">
-              <i class="bi bi-camera"></i> Scan Food
-            </a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="/scan-peptides">
-              <i class="bi bi-upc-scan"></i> Scan Peptides
-            </a>
-          </li>
-        {% endif %}
-
         {% if has_endpoint('peptide_calculator') %}
           <li class="nav-item">
             <a class="nav-link {% if request.endpoint in ['peptide_calculator', 'calculator'] %}active{% endif %}" href="{{ url_for('peptide_calculator') }}">
@@ -89,6 +75,33 @@
             </a>
           </li>
         {% endif %}
+
+        {# Nutrition #}
+        {% if has_endpoint('nutrition') %}
+          <li class="nav-item">
+            <a class="nav-link {% if request.endpoint == 'nutrition' %}active{% endif %}" href="{{ url_for('nutrition') }}">
+              <i class="bi bi-egg-fried"></i> Nutrition
+            </a>
+          </li>
+        {% endif %}
+
+        {# Tools dropdown: Scan links (login only) #}
+        {% if current_user.is_authenticated %}
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" id="toolsDrop" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              <i class="bi bi-wrench-adjustable"></i> Tools
+            </a>
+            <ul class="dropdown-menu" aria-labelledby="toolsDrop">
+              <li><a class="dropdown-item" href="/scan-food"><i class="bi bi-camera"></i> Scan Food</a></li>
+              <li><a class="dropdown-item" href="/scan-peptides"><i class="bi bi-upc-scan"></i> Scan Peptides</a></li>
+              {% if has_endpoint('nutrition') %}
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item" href="{{ url_for('nutrition') }}"><i class="bi bi-egg-fried"></i> Nutrition Tracker</a></li>
+              {% endif %}
+            </ul>
+          </li>
+        {% endif %}
+
       </ul>
 
       {% if current_user.is_authenticated %}
