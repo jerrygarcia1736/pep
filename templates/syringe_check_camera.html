@@ -364,6 +364,98 @@
              iy: Math.max(0, Math.min(imgH-1, Math.round(ny * imgH))) };
   }
 
+  
+  function getGrayAt(imgData, x, y){
+    const w = imgData.width;
+    const h = imgData.height;
+    x = Math.max(0, Math.min(w-1, x));
+    y = Math.max(0, Math.min(h-1, y));
+    const i = (y*w + x) * 4;
+    const r = imgData.data[i], g = imgData.data[i+1], b = imgData.data[i+2];
+    return 0.299*r + 0.587*g + 0.114*b;
+  }
+
+  function imageToOverlayCoords(ix, iy){
+    // Inverse of overlayToImageCoords mapping (approx)
+    const rect = overlay.getBoundingClientRect();
+    const dispW = rect.width, dispH = rect.height;
+    const imgW = canvas.width, imgH = canvas.height;
+    const dispAR = dispW/dispH;
+    const imgAR = imgW/imgH;
+
+    let vx=0, vy=0, vw=dispW, vh=dispH;
+    if(imgAR > dispAR){
+      vh = dispW / imgAR;
+      vy = (dispH - vh)/2;
+    }else{
+      vw = dispH * imgAR;
+      vx = (dispW - vw)/2;
+    }
+
+    const x = vx + (ix / imgW) * vw;
+    const y = vy + (iy / imgH) * vh;
+    return { x, y };
+  }
+
+  function snapPlungerToEdge(plungerOverlay){
+    // Requires lastImage and taps[0], taps[1] to be present.
+    if(!lastImage || taps.length < 2) return plungerOverlay;
+
+    // Convert calibration points to image coords
+    const p0i = overlayToImageCoords(taps[0].x, taps[0].y);
+    const p1i = overlayToImageCoords(taps[1].x, taps[1].y);
+
+    const dx = p1i.ix - p0i.ix;
+    const dy = p1i.iy - p0i.iy;
+    const len = Math.hypot(dx, dy);
+    if(len < 10) return plungerOverlay;
+
+    const ux = dx / len;
+    const uy = dy / len;
+
+    // normal (perpendicular) for edge response
+    const nx = -uy;
+    const ny = ux;
+
+    // starting point in image coords
+    const pti = overlayToImageCoords(plungerOverlay.x, plungerOverlay.y);
+
+    // Search along axis +/- windowPx for best edge response
+    const windowPx = 50;   // how far to search along axis
+    const stepPx = 1;      // resolution
+    const probe = 6;       // how far to probe across normal on each side
+
+    let bestScore = -1;
+    let bestX = pti.ix;
+    let bestY = pti.iy;
+
+    for(let s = -windowPx; s <= windowPx; s += stepPx){
+      const cx = Math.round(pti.ix + ux * s);
+      const cy = Math.round(pti.iy + uy * s);
+
+      // Edge score = abs difference across normal direction
+      const a = getGrayAt(lastImage, cx + Math.round(nx*probe), cy + Math.round(ny*probe));
+      const b = getGrayAt(lastImage, cx - Math.round(nx*probe), cy - Math.round(ny*probe));
+      const score = Math.abs(a - b);
+
+      if(score > bestScore){
+        bestScore = score;
+        bestX = cx;
+        bestY = cy;
+      }
+    }
+
+    // If contrast is very low, don't snap (avoid random jumps)
+    if(bestScore < 12){
+      return plungerOverlay;
+    }
+
+    // Convert back to overlay coords
+    const snappedOverlay = imageToOverlayCoords(bestX, bestY);
+    return snappedOverlay;
+  }
+
+
   function computeMeasured(){
     if(taps.length < 3) return null;
     // We measure along the line from zero->max in overlay coords.
@@ -481,6 +573,11 @@
     drawGuides();
 
     if(taps.length === 3){
+      // Snap the plunger tap to the nearest strong edge (helps accuracy)
+      const snapped = snapPlungerToEdge(taps[2]);
+      taps[2] = snapped;
+      drawGuides();
+
       const frac = computeMeasured();
       if(frac === null){
         measuredMain.textContent = "—";
