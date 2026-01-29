@@ -29,8 +29,19 @@
 
         {% if current_user.is_authenticated %}
         <li class="nav-item">
-          <a class="nav-link" href="{{ url_for('chat') }}">
-            <i class="bi bi-chat-dots"></i> Pep AI
+          <a class="nav-link d-flex align-items-center gap-2" href="{{ url_for('chat') }}">
+            <span><i class="bi bi-chat-dots"></i> Pep AI</span>
+            {# Credits badge (safe fallbacks so it won't break if helper isn't present) #}
+            {% set remaining = (pep_ai_remaining() if pep_ai_remaining is defined else None) %}
+            {% if remaining is not none %}
+              <span class="badge text-bg-light">Credits: {{ remaining }}</span>
+            {% else %}
+              {% if current_user.tier is defined and current_user.tier != 'free' %}
+                <span class="badge text-bg-light">Credits: ∞</span>
+              {% else %}
+                <span class="badge text-bg-light">Credits</span>
+              {% endif %}
+            {% endif %}
           </a>
         </li>
 
