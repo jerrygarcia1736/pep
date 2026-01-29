@@ -84,7 +84,12 @@
           <span class="badge text-bg-light ms-1">{{ current_user.tier }}</span>
         </a>
         <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDrop">
-          {% if has_endpoint('coaching') %}
+          
+          {% if current_user.tier == 'free' %}
+            <li><a class="dropdown-item" href="{{ url_for('upgrade') if has_endpoint('upgrade') else '/upgrade' }}"><i class="bi bi-arrow-up-circle"></i> Upgrade</a></li>
+            <li><hr class="dropdown-divider"></li>
+          {% endif %}
+{% if has_endpoint('coaching') %}
             {% if tier_at_least(current_user.tier, 'tier1') %}
               <li><a class="dropdown-item" href="{{ url_for('coaching') }}"><i class="bi bi-stars"></i> Coaching</a></li>
             {% else %}
