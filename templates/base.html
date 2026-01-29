@@ -44,6 +44,20 @@
           </li>
         {% endif %}
 
+        {# Scan tools (always available to logged-in users once routes exist) #}
+        {% if current_user.is_authenticated %}
+          <li class="nav-item">
+            <a class="nav-link" href="/scan-food">
+              <i class="bi bi-camera"></i> Scan Food
+            </a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="/scan-peptides">
+              <i class="bi bi-upc-scan"></i> Scan Peptides
+            </a>
+          </li>
+        {% endif %}
+
         {% if has_endpoint('peptide_calculator') %}
           <li class="nav-item">
             <a class="nav-link {% if request.endpoint in ['peptide_calculator', 'calculator'] %}active{% endif %}" href="{{ url_for('peptide_calculator') }}">
@@ -84,18 +98,20 @@
           <span class="badge text-bg-light ms-1">{{ current_user.tier }}</span>
         </a>
         <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDrop">
-          
+
           {% if current_user.tier == 'free' %}
             <li><a class="dropdown-item" href="{{ url_for('upgrade') if has_endpoint('upgrade') else '/upgrade' }}"><i class="bi bi-arrow-up-circle"></i> Upgrade</a></li>
             <li><hr class="dropdown-divider"></li>
           {% endif %}
-{% if has_endpoint('coaching') %}
+
+          {% if has_endpoint('coaching') %}
             {% if tier_at_least(current_user.tier, 'tier1') %}
               <li><a class="dropdown-item" href="{{ url_for('coaching') }}"><i class="bi bi-stars"></i> Coaching</a></li>
             {% else %}
               <li><span class="dropdown-item-text"><i class="bi bi-lock"></i> Coaching (Tier1)</span></li>
             {% endif %}
           {% endif %}
+
           <li><hr class="dropdown-divider"></li>
           {% if has_endpoint('logout') %}<li><a class="dropdown-item" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i> Logout</a></li>{% endif %}
         </ul>
