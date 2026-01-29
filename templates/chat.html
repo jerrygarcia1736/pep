@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Pep AI - Peptide Tracker
+{% block title %}Pep AI - Peptide Tracker{% endblock %}
+
 <!-- Upgrade Modal -->
 <div class="modal fade" id="upgradeModal" tabindex="-1" aria-labelledby="upgradeModalLabel" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
@@ -20,8 +21,6 @@
   </div>
 </div>
 
-{% endblock %}
-
 {% block content %}
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
   <h1 class="mb-0">
@@ -39,8 +38,8 @@
 </div>
 
 <div class="alert alert-warning" role="alert">
-  <strong>Educational Tool Only:</strong> Pep AI provides general research summaries and math help (e.g., reconstitution).
-  It does not provide medical advice. Consult a licensed healthcare professional for medical decisions.
+  <strong>Educational Tool Only:</strong> Pep AI provides general research summaries and math help.
+  It does not provide medical advice.
 </div>
 
 <div class="card shadow-sm border-0">
@@ -101,8 +100,9 @@
   function setLoading(isLoading){
     sendBtn.disabled = isLoading;
     input.disabled = isLoading;
-    if (isLoading) sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
-    else sendBtn.innerHTML = '<i class="bi bi-send"></i>';
+    sendBtn.innerHTML = isLoading
+      ? '<span class="spinner-border spinner-border-sm"></span>'
+      : '<i class="bi bi-send"></i>';
   }
 
   // Load history
@@ -115,7 +115,6 @@
   function saveHistory(){
     const bubbles = chatWindow.querySelectorAll(".rounded-4");
     const msgs = [];
-    // Skip the first tip text if no messages
     bubbles.forEach(b => {
       const isUser = b.classList.contains("bg-primary");
       msgs.push({ role: isUser ? "user" : "assistant", text: b.textContent });
@@ -127,6 +126,14 @@
     chatWindow.innerHTML = '<div class="text-muted small">Ask about mechanisms, study summaries, common research ranges, or use Pep AI for calculation help.</div>';
     localStorage.removeItem(KEY);
   });
+
+  // 🔹 PREFILL SUPPORT
+  const params = new URLSearchParams(window.location.search);
+  const prefill = params.get("prefill");
+  if(prefill){
+    input.value = decodeURIComponent(prefill);
+    input.focus();
+  }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -146,17 +153,8 @@
       });
 
       const data = await resp.json().catch(() => ({}));
-
-      if (!resp.ok){
-        const err = data.error || data.message || ("Request failed (" + resp.status + ")");
-        addBubble("assistant", "Sorry — " + err);
-        saveHistory();
-        setLoading(false);
-        return;
-      }
-
-      // Accept either {reply: "..."} or {message:"..."} depending on your backend
       const reply = data.reply || data.message || data.content || "";
+
       addBubble("assistant", reply || "No response received.");
       saveHistory();
     }catch(err){
@@ -167,7 +165,6 @@
       input.focus();
     }
   });
-
 })();
 </script>
 {% endblock %}
