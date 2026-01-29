@@ -1,62 +1,38 @@
 {% extends "base.html" %}
-{% block title %}Profile Setup{% endblock %}
+{% block title %}Profile (Optional){% endblock %}
 {% block content %}
-<div class="container" style="max-width: 980px;">
-  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
-    <div>
-      <h3 class="mb-1"><i class="bi bi-person-badge"></i> Profile (optional)</h3>
-      <div class="text-muted">Two quick inputs to personalize Pep AI. You can skip and do this later.</div>
-    </div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Skip for now</a>
+<div class="container" style="max-width:720px">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Profile (optional)</h2>
+    <a class="btn btn-outline-secondary" href="{{ url_for('profile_skip') }}">Skip for now</a>
   </div>
 
-  <form method="post">
-    <div class="card shadow-sm mb-3">
+  <form method="post" novalidate>
+    <div class="card mb-3">
       <div class="card-body">
-        <h5 class="mb-2"><i class="bi bi-bullseye"></i> Your goals</h5>
-        <div class="row g-2">
-          {% for k,label,desc,icon in [
-            ('fat_loss','Fat loss','Weight management & body composition','bi-fire'),
-            ('muscle_gain','Muscle gain','Hypertrophy & strength','bi-lightning'),
-            ('recovery','Injury recovery','Healing & tissue repair','bi-heart-pulse'),
-            ('longevity','Longevity','Healthspan & aging','bi-hourglass-split'),
-            ('skin','Skin health','Appearance & collagen','bi-droplet'),
-            ('cognition','Cognition','Focus & mental clarity','bi-lightbulb')
-          ] %}
-          <div class="col-md-4">
-            <label class="w-100 border rounded p-3 h-100" style="cursor:pointer;">
-              <div class="form-check">
-                <input class="form-check-input" type="checkbox" name="goals" value="{{ k }}" id="g_{{k}}">
-                <span class="ms-1 fw-semibold"><i class="bi {{icon}}"></i> {{ label }}</span>
-              </div>
-              <div class="text-muted small mt-1">{{ desc }}</div>
-            </label>
-          </div>
-          {% endfor %}
+        <h5>Your goals</h5>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="goals" value="fat_loss">
+          <label class="form-check-label">Fat loss</label>
         </div>
-      </div>
-    </div>
-
-    <div class="card shadow-sm mb-3">
-      <div class="card-body">
-        <h5 class="mb-2"><i class="bi bi-stars"></i> Experience level</h5>
-        <div class="d-flex flex-wrap gap-2">
-          <input class="btn-check" type="radio" name="experience_level" id="exp_beginner" value="beginner" checked>
-          <label class="btn btn-outline-primary" for="exp_beginner">Beginner</label>
-
-          <input class="btn-check" type="radio" name="experience_level" id="exp_intermediate" value="intermediate">
-          <label class="btn btn-outline-primary" for="exp_intermediate">Intermediate</label>
-
-          <input class="btn-check" type="radio" name="experience_level" id="exp_advanced" value="advanced">
-          <label class="btn btn-outline-primary" for="exp_advanced">Advanced</label>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="goals" value="muscle">
+          <label class="form-check-label">Muscle gain</label>
         </div>
-        <div class="text-muted small mt-2">Used only to tailor educational tone and safety reminders.</div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="goals" value="recovery">
+          <label class="form-check-label">Injury recovery</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="goals" value="longevity">
+          <label class="form-check-label">Longevity</label>
+        </div>
       </div>
     </div>
 
     <div class="d-flex gap-2">
-      <button class="btn btn-primary" type="submit">Save</button>
-      <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Cancel</a>
+      <button class="btn btn-primary">Save profile</button>
+      <button class="btn btn-outline-secondary" name="action" value="skip" type="submit">Skip for now</button>
     </div>
   </form>
 </div>
