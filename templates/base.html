@@ -21,15 +21,51 @@
 
     <div class="collapse navbar-collapse" id="navMain">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-        <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('dashboard') }}">
+            <i class="bi bi-speedometer2"></i> Dashboard
+          </a>
+        </li>
+
         {% if current_user.is_authenticated %}
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('chat') }}">Pep AI</a></li>
-          <li class="nav-item"><a class="nav-link" href="/scan-peptides?autocam=1">Scan Peptides</a></li>
-          <li class="nav-item"><a class="nav-link" href="/scan-nutrition?autocam=1">Scan Nutrition</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('peptide_calculator') }}">Calculator</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('protocols') }}">Protocols</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('vials') }}">Vials</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('history') }}">History</a></li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('chat') }}">
+            <i class="bi bi-chat-dots"></i> Pep AI
+          </a>
+        </li>
+
+        <!-- CAMERA ICONS RESTORED -->
+        <li class="nav-item">
+          <a class="nav-link" href="/scan-peptides?autocam=1">
+            <i class="bi bi-camera"></i> Scan Peptides
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="/scan-nutrition?autocam=1">
+            <i class="bi bi-camera"></i> Scan Nutrition
+          </a>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('peptide_calculator') }}">
+            <i class="bi bi-calculator"></i> Calculator
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('protocols') }}">
+            <i class="bi bi-clipboard2-check"></i> Protocols
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('vials') }}">
+            <i class="bi bi-droplet"></i> Vials
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('history') }}">
+            <i class="bi bi-clock-history"></i> History
+          </a>
+        </li>
         {% endif %}
       </ul>
 
