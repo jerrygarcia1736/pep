@@ -1,208 +1,145 @@
 {% extends "base.html" %}
 
-{% block title %}AI Assistant - Peptide Tracker{% endblock %}
+{% block title %}Pep AI - Peptide Tracker{% endblock %}
 
 {% block content %}
-<h1 class="mb-4">
-    <i class="bi bi-chat-dots"></i> AI Peptide Assistant
-</h1>
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+  <h1 class="mb-0">
+    <i class="bi bi-chat-dots"></i> Pep AI
+  </h1>
+  <span class="badge bg-secondary">Educational only</span>
+</div>
 
-<div class="row">
-    <div class="col-lg-8">
-        <div class="card">
-            <div class="card-header bg-primary text-white">
-                <h5 class="mb-0"><i class="bi bi-robot"></i> Ask me anything about peptides!</h5>
-            </div>
-            <div class="card-body" id="chat-container" style="height: 500px; overflow-y: auto;">
-                <div id="chat-messages">
-                    <!-- Welcome message -->
-                    <div class="message assistant-message mb-3">
-                        <div class="bg-light p-3 rounded">
-                            <strong><i class="bi bi-robot"></i> AI Assistant:</strong>
-                            <p class="mb-0 mt-2">
-                                Hi! I'm your peptide assistant. I can help you with:
-                            </p>
-                            <ul class="mb-0 mt-2">
-                                <li>Peptide information and dosing</li>
-                                <li>Protocol recommendations</li>
-                                <li>Peptide stacking advice</li>
-                                <li>Safety and contraindications</li>
-                            </ul>
-                            <p class="mb-0 mt-2 text-muted small">
-                                <em>Note: This is educational information only. Always consult healthcare professionals.</em>
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="card-footer">
-                <form id="chat-form">
-                    <div class="input-group">
-                        <input type="text" 
-                               id="user-input" 
-                               class="form-control" 
-                               placeholder="Ask about peptides, dosing, protocols..."
-                               required
-                               autocomplete="off">
-                        <button type="submit" class="btn btn-primary" id="send-btn">
-                            <i class="bi bi-send"></i> Send
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
+<div class="alert alert-warning" role="alert">
+  <strong>Educational Tool Only:</strong> Pep AI provides general research summaries and math help (e.g., reconstitution).
+  It does not provide medical advice. Consult a licensed healthcare professional for medical decisions.
+</div>
+
+<div class="card shadow-sm border-0">
+  <div class="card-header bg-white d-flex align-items-center justify-content-between">
+    <div class="fw-semibold">Chat</div>
+    <button class="btn btn-sm btn-outline-secondary" id="clearBtn" type="button">
+      <i class="bi bi-trash"></i> Clear
+    </button>
+  </div>
+
+  <div class="card-body" style="height: 55vh; overflow:auto;" id="chatWindow" aria-live="polite">
+    <div class="text-muted small">
+      Ask about mechanisms, study summaries, common research ranges, or use Pep AI for calculation help.
     </div>
-    
-    <div class="col-lg-4">
-        <div class="card mb-3">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-lightbulb"></i> Example Questions</h5>
-            </div>
-            <div class="card-body">
-                <div class="d-grid gap-2">
-                    <button class="btn btn-sm btn-outline-primary text-start example-btn" 
-                            data-question="What's the best dose for BPC-157 for tendon repair?">
-                        BPC-157 dosing for tendons
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary text-start example-btn" 
-                            data-question="Which peptides are best for fat loss?">
-                        Peptides for fat loss
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary text-start example-btn" 
-                            data-question="Can I stack TB-500 with BPC-157?">
-                        Stacking TB-500 + BPC-157
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary text-start example-btn" 
-                            data-question="What are the side effects of GHRP-2?">
-                        GHRP-2 side effects
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary text-start example-btn" 
-                            data-question="How long should I run a CJC-1295 protocol?">
-                        CJC-1295 protocol duration
-                    </button>
-                </div>
-            </div>
-        </div>
-        
-        <div class="card">
-            <div class="card-header bg-warning">
-                <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Disclaimer</h5>
-            </div>
-            <div class="card-body">
-                <p class="small mb-0">
-                    This AI provides educational information only. It is not medical advice. 
-                    Always consult qualified healthcare professionals before using any peptides.
-                </p>
-            </div>
-        </div>
+  </div>
+
+  <div class="card-footer bg-white">
+    <form id="chatForm" class="d-flex gap-2">
+      <input class="form-control" id="messageInput" placeholder="Type your question..." autocomplete="off" />
+      <button class="btn btn-primary" type="submit" id="sendBtn">
+        <i class="bi bi-send"></i>
+      </button>
+    </form>
+    <div class="small text-muted mt-2">
+      Tip: You can paste a study abstract or ask “summarize the evidence for …”.
     </div>
+  </div>
 </div>
 {% endblock %}
 
-{% block extra_js %}
+{% block scripts %}
 <script>
-const chatForm = document.getElementById('chat-form');
-const userInput = document.getElementById('user-input');
-const chatMessages = document.getElementById('chat-messages');
-const chatContainer = document.getElementById('chat-container');
-const sendBtn = document.getElementById('send-btn');
+(function(){
+  const chatWindow = document.getElementById("chatWindow");
+  const form = document.getElementById("chatForm");
+  const input = document.getElementById("messageInput");
+  const clearBtn = document.getElementById("clearBtn");
+  const sendBtn = document.getElementById("sendBtn");
 
-// Example question buttons
-document.querySelectorAll('.example-btn').forEach(btn => {
-    btn.addEventListener('click', function() {
-        userInput.value = this.getAttribute('data-question');
-        chatForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  function el(tag, cls, text){
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function addBubble(role, text){
+    const wrap = el("div", "d-flex mb-3 " + (role === "user" ? "justify-content-end" : "justify-content-start"));
+    const bubble = el("div", "p-3 rounded-4 " + (role === "user" ? "bg-primary text-white" : "bg-light border"));
+    bubble.style.maxWidth = "85%";
+    bubble.style.whiteSpace = "pre-wrap";
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+    chatWindow.appendChild(wrap);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+  }
+
+  function setLoading(isLoading){
+    sendBtn.disabled = isLoading;
+    input.disabled = isLoading;
+    if (isLoading) sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+    else sendBtn.innerHTML = '<i class="bi bi-send"></i>';
+  }
+
+  // Load history
+  const KEY = "pep_ai_chat_history_v1";
+  try{
+    const saved = JSON.parse(localStorage.getItem(KEY) || "[]");
+    saved.forEach(m => addBubble(m.role, m.text));
+  }catch(e){}
+
+  function saveHistory(){
+    const bubbles = chatWindow.querySelectorAll(".rounded-4");
+    const msgs = [];
+    // Skip the first tip text if no messages
+    bubbles.forEach(b => {
+      const isUser = b.classList.contains("bg-primary");
+      msgs.push({ role: isUser ? "user" : "assistant", text: b.textContent });
     });
-});
+    localStorage.setItem(KEY, JSON.stringify(msgs.slice(-50)));
+  }
 
-// Handle form submission
-chatForm.addEventListener('submit', async function(e) {
+  clearBtn.addEventListener("click", () => {
+    chatWindow.innerHTML = '<div class="text-muted small">Ask about mechanisms, study summaries, common research ranges, or use Pep AI for calculation help.</div>';
+    localStorage.removeItem(KEY);
+  });
+
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    
-    const message = userInput.value.trim();
-    if (!message) return;
-    
-    // Disable input while processing
-    userInput.disabled = true;
-    sendBtn.disabled = true;
-    sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Thinking...';
-    
-    // Add user message to chat
-    addMessage(message, 'user');
-    userInput.value = '';
-    
-    try {
-        // Call API
-        const response = await fetch('/api/chat', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ message: message })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            addMessage(data.message, 'assistant');
-        } else {
-            addMessage('Sorry, I encountered an error. Please try again.', 'assistant', true);
-        }
-    } catch (error) {
-        console.error('Chat error:', error);
-        addMessage('Sorry, I could not connect to the AI. Please try again.', 'assistant', true);
-    } finally {
-        // Re-enable input
-        userInput.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.innerHTML = '<i class="bi bi-send"></i> Send';
-        userInput.focus();
+    const msg = (input.value || "").trim();
+    if (!msg) return;
+
+    addBubble("user", msg);
+    saveHistory();
+    input.value = "";
+    setLoading(true);
+
+    try{
+      const resp = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg })
+      });
+
+      const data = await resp.json().catch(() => ({}));
+
+      if (!resp.ok){
+        const err = data.error || data.message || ("Request failed (" + resp.status + ")");
+        addBubble("assistant", "Sorry — " + err);
+        saveHistory();
+        setLoading(false);
+        return;
+      }
+
+      // Accept either {reply: "..."} or {message:"..."} depending on your backend
+      const reply = data.reply || data.message || data.content || "";
+      addBubble("assistant", reply || "No response received.");
+      saveHistory();
+    }catch(err){
+      addBubble("assistant", "Network error. Please try again.");
+      saveHistory();
+    }finally{
+      setLoading(false);
+      input.focus();
     }
-});
+  });
 
-function addMessage(text, sender, isError = false) {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${sender}-message mb-3`;
-    
-    if (sender === 'user') {
-        messageDiv.innerHTML = `
-            <div class="bg-primary text-white p-3 rounded">
-                <strong><i class="bi bi-person"></i> You:</strong>
-                <p class="mb-0 mt-2">${escapeHtml(text)}</p>
-            </div>
-        `;
-    } else {
-        const bgClass = isError ? 'bg-danger text-white' : 'bg-light';
-        messageDiv.innerHTML = `
-            <div class="${bgClass} p-3 rounded">
-                <strong><i class="bi bi-robot"></i> AI Assistant:</strong>
-                <p class="mb-0 mt-2">${formatMessage(text)}</p>
-            </div>
-        `;
-    }
-    
-    chatMessages.appendChild(messageDiv);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function formatMessage(text) {
-    // Convert newlines to <br>
-    text = escapeHtml(text);
-    text = text.replace(/\n/g, '<br>');
-    
-    // Bold text between ** **
-    text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    
-    return text;
-}
-
-// Focus input on load
-userInput.focus();
+})();
 </script>
 {% endblock %}
