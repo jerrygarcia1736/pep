@@ -3,12 +3,19 @@
 {% block title %}Pep AI - Peptide Tracker{% endblock %}
 
 {% block content %}
+
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
   <h1 class="mb-0">
     <i class="bi bi-chat-dots"></i> Pep AI
   </h1>
-  <span class="badge bg-secondary">Educational only</span>
+  <div class="d-flex align-items-center gap-2">
+    <span class="badge bg-secondary">Educational only</span>
+    {% if current_user.is_authenticated and current_user.tier == 'free' %}
+      <span id="remainingBadge" class="badge bg-info text-dark">Free uses left: {{ pep_ai_remaining() if pep_ai_remaining() is not none else 10 }}</span>
+    {% endif %}
+  </div>
 </div>
+
 
 <div class="alert alert-warning" role="alert">
   <strong>Educational Tool Only:</strong> Pep AI provides general research summaries and math help (e.g., reconstitution).
@@ -44,6 +51,27 @@
 {% endblock %}
 
 {% block scripts %}
+
+<!-- Upgrade Modal -->
+<div class="modal fade" id="upgradeModal" tabindex="-1" aria-labelledby="upgradeModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="upgradeModalLabel"><i class="bi bi-lock"></i> Free Pep AI limit reached</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        You’ve used your <strong>10 free Pep AI questions</strong>.
+        Upgrade to keep using Pep AI.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Not now</button>
+        <a class="btn btn-primary" href="/upgrade">Upgrade</a>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   const chatWindow = document.getElementById("chatWindow");
@@ -119,13 +147,35 @@
 
       const data = await resp.json().catch(() => ({}));
 
+      
       if (!resp.ok){
+        if ((resp.status === 402) || data.error === "limit_reached"){
+          // Show upgrade modal and disable input
+          try{
+            const m = new bootstrap.Modal(document.getElementById("upgradeModal"));
+            m.show();
+          }catch(e){}
+          input.disabled = true;
+          sendBtn.disabled = true;
+          addBubble("assistant", data.message || "Free Pep AI limit reached. Please upgrade to continue.");
+          saveHistory();
+          setLoading(false);
+          return;
+        }
+
         const err = data.error || data.message || ("Request failed (" + resp.status + ")");
         addBubble("assistant", "Sorry — " + err);
         saveHistory();
         setLoading(false);
         return;
       }
+
+      // Update remaining badge if provided
+      if (typeof data.remaining === "number"){
+        const badge = document.getElementById("remainingBadge");
+        if (badge) badge.textContent = "Free uses left: " + data.remaining;
+      }
+
 
       // Accept either {reply: "..."} or {message:"..."} depending on your backend
       const reply = data.reply || data.message || data.content || "";

@@ -29,21 +29,19 @@
           </li>
         {% endif %}
 
-        {# Pep AI is a Tier1+ feature, and only shown if the endpoint exists #}
-        {% if has_endpoint('chat') %}
-          {% if current_user.is_authenticated and tier_at_least(current_user.tier, 'tier1') %}
-            <li class="nav-item">
-              <a class="nav-link {% if request.endpoint == 'chat' %}active{% endif %}" href="{{ url_for('chat') }}">
-                <i class="bi bi-chat-dots"></i> Pep AI
-              </a>
-            </li>
-          {% else %}
-            <li class="nav-item">
-              <a class="nav-link disabled" href="#" tabindex="-1" aria-disabled="true">
-                <i class="bi bi-lock"></i> Pep AI
-              </a>
-            </li>
-          {% endif %}
+        {# Pep AI is available to all logged-in users, but free tier is limited to 10 uses #}
+        {% if has_endpoint('chat') and current_user.is_authenticated %}
+          <li class="nav-item">
+            <a class="nav-link {% if request.endpoint == 'chat' %}active{% endif %}" href="{{ url_for('chat') }}">
+              <i class="bi bi-chat-dots"></i> Pep AI
+              {% if current_user.tier == 'free' %}
+                {% set remaining = pep_ai_remaining() %}
+                {% if remaining is not none %}
+                  <span class="badge text-bg-light ms-1">{{ remaining }}</span>
+                {% endif %}
+              {% endif %}
+            </a>
+          </li>
         {% endif %}
 
         {% if has_endpoint('peptide_calculator') %}

@@ -65,17 +65,6 @@ class User(ModelBase):
         return check_password_hash(self.password_hash, password)
 
 # Food log model for nutrition tracking
-
-class PepAIUsage(ModelBase):
-    """Tracks Pep AI usage for free-tier limits (one row per user)."""
-    __tablename__ = "pep_ai_usage"
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, unique=True)
-    used = Column(Integer, nullable=False, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 class FoodLog(ModelBase):
     __tablename__ = "food_logs"
     
@@ -124,8 +113,6 @@ class UserProfile(ModelBase):
 # -----------------------------------------------------------------------------
 # DB init + migration
 # -----------------------------------------------------------------------------
-FREE_PEP_AI_LIMIT = int(os.environ.get("FREE_PEP_AI_LIMIT", 10))
-
 db_url = Config.DATABASE_URL
 engine = create_engine(db_url)
 
@@ -176,7 +163,7 @@ def login_required(f):
         # Since profile setup is now integrated into the dashboard, we allow the dashboard
         # to load even if the profile is incomplete, and we redirect other protected pages
         # back to the dashboard until the profile is completed.
-        if f.__name__ not in ("profile_setup", "dashboard", "chat", "api_chat"):
+        if f.__name__ not in ("profile_setup", "dashboard"):
             db = get_session(db_url)
             try:
                 profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
@@ -213,32 +200,13 @@ def inject_template_helpers():
         return name in app.view_functions
 
     if not user:
-        return {"current_user": AnonymousUser(), "has_endpoint": has_endpoint, "tier_at_least": tier_at_least, "pep_ai_remaining": (lambda: None)}
+        return {"current_user": AnonymousUser(), "has_endpoint": has_endpoint, "tier_at_least": tier_at_least}
 
     user.is_authenticated = True
-    if
-    def pep_ai_remaining() -> int | None:
-        """Returns remaining free Pep AI uses for the current user.
-        - None means unlimited (tier1+)
-        - 0+ is remaining uses for free tier
-        """
-        try:
-            if tier_at_least(user.tier, "tier1"):
-                return None
-            db = get_session(db_url)
-            try:
-                usage = db.query(PepAIUsage).filter_by(user_id=user.id).first()
-                used = usage.used if usage else 0
-                return max(FREE_PEP_AI_LIMIT - used, 0)
-            finally:
-                db.close()
-        except Exception:
-            return None
-
-     not getattr(user, "tier", None):
+    if not getattr(user, "tier", None):
         user.tier = "free"
 
-    return {"current_user": user, "has_endpoint": has_endpoint, "tier_at_least": tier_at_least, "pep_ai_remaining": pep_ai_remaining}
+    return {"current_user": user, "has_endpoint": has_endpoint, "tier_at_least": tier_at_least}
 
 # -----------------------------------------------------------------------------
 # Utility: render template if it exists
@@ -1226,57 +1194,17 @@ def _call_openai_chat(message: str) -> str:
 @login_required
 def api_chat():
     """Pep AI chat endpoint used by templates/chat.html."""
-    db = get_session(db_url)
     try:
-        user = db.query(User).filter_by(id=session.get("user_id")).first()
-        if not user:
-            return jsonify({"error": "auth_required", "message": "Please log in."}), 401
-
         data = request.get_json(silent=True) or {}
         message = (data.get("message") or "").strip()
         if not message:
-            return jsonify({"error": "bad_request", "message": "Message is required"}), 400
-
-        # Free-tier metering: 10 free uses, then require upgrade.
-        remaining = None
-        if not tier_at_least(getattr(user, "tier", "free"), "tier1"):
-            usage = db.query(PepAIUsage).filter_by(user_id=user.id).first()
-            if not usage:
-                usage = PepAIUsage(user_id=user.id, used=0)
-                db.add(usage)
-                db.commit()
-
-            if usage.used >= FREE_PEP_AI_LIMIT:
-                return jsonify({
-                    "error": "limit_reached",
-                    "message": "You’ve used your 10 free Pep AI questions.",
-                    "remaining": 0
-                }), 402
-
-            # Count this request up-front (prevents accidental free retries).
-            usage.used += 1
-            db.commit()
-            remaining = max(FREE_PEP_AI_LIMIT - usage.used, 0)
+            return jsonify({"error": "Message is required"}), 400
 
         reply = _call_openai_chat(message)
-
-        resp = {"reply": reply}
-        if remaining is not None:
-            resp["remaining"] = remaining
-        return jsonify(resp)
+        return jsonify({"reply": reply})
     except Exception as e:
         print(f"/api/chat error: {e}")
-        return jsonify({"error": "server_error", "message": "Server error"}), 500
-    finally:
-        db.close()
-
-
-
-
-@app.route("/upgrade")
-def upgrade():
-    # Placeholder upgrade page (Stripe integration can replace this later)
-    return render_if_exists("upgrade.html", fallback_endpoint="dashboard")
+        return jsonify({"error": "Server error"}), 500
 
 
 # -----------------------------------------------------------------------------
