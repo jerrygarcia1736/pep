@@ -4,74 +4,62 @@
 
 {% block content %}
 
-{% if current_user.is_authenticated and (not current_user.profile_completed or not current_user.disclaimer_accepted_at) %}
+{# Onboarding banner (uses attrs injected onto current_user in app.py) #}
+{% set onboard_ok = current_user.is_authenticated and current_user.profile_completed and current_user.disclaimer_accepted_at %}
+
+{% if current_user.is_authenticated and not onboard_ok %}
 <div class="alert alert-info d-flex align-items-start justify-content-between" role="alert">
   <div class="me-3">
-    <div class="fw-semibold"><i class="bi bi-check2-square"></i> Finish setup to unlock the full dashboard</div>
-    <div class="small">Complete the 2-step profile and acknowledge the educational disclaimer to personalize your experience and enable Pep AI.</div>
+    <div class="fw-semibold"><i class="bi bi-check2-square"></i> Finish setup to unlock Pep AI + personalization</div>
+    <div class="small">You can still use the full dashboard. Profile + disclaimer help personalize Pep AI and keep it safer.</div>
   </div>
-  <div class="text-nowrap">
-    <a class="btn btn-primary btn-sm" href="{{ url_for('onboarding_step1') if has_endpoint('onboarding_step1') else (url_for('profile_setup') if has_endpoint('profile_setup') else '/profile-setup') }}">Complete setup</a>
-  </div>
-</div>
-{% endif %}
-
-{% if current_user.is_authenticated and not current_user.profile_completed %}
-<div class="card shadow-sm mb-4" data-testid="setup-card">
-  <div class="card-body d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3">
-    <div>
-      <div class="fw-semibold">Complete your profile</div>
-      <div class="text-muted small">Two quick steps — goals + basics. Helps personalize your dashboard and keeps Pep AI safer.</div>
-    </div>
-    <div class="text-nowrap">
-      <a class="btn btn-outline-primary btn-sm" href="{{ url_for('onboarding_step1') if has_endpoint('onboarding_step1') else (url_for('profile_setup') if has_endpoint('profile_setup') else '/profile-setup') }}">
-        Continue setup
-      </a>
-    </div>
+  <div class="text-nowrap d-flex gap-2">
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('dashboard') }}">Skip for now</a>
+    <a class="btn btn-primary btn-sm" href="{{ url_for('onboarding_step_1') if has_endpoint('onboarding_step_1') else (url_for('profile_setup') if has_endpoint('profile_setup') else '/profile-setup') }}">Complete setup</a>
   </div>
 </div>
 {% endif %}
 
 <h1 class="mb-4">
-    <i class="bi bi-speedometer2"></i> Dashboard
+  <i class="bi bi-speedometer2"></i> Dashboard
 </h1>
 
 <!-- Stats Cards -->
 <div class="row g-4 mb-4">
-    <div class="col-md-3">
-        <div class="card bg-primary text-white">
-            <div class="card-body">
-                <h5 class="card-title">Active Protocols</h5>
-                <p class="display-4">{{ stats.active_protocols }}</p>
-            </div>
-        </div>
+  <div class="col-md-3">
+    <div class="card bg-primary text-white">
+      <div class="card-body">
+        <h5 class="card-title">Active Protocols</h5>
+        <p class="display-4">{{ stats.active_protocols }}</p>
+      </div>
     </div>
-    <div class="col-md-3">
-        <div class="card bg-success text-white">
-            <div class="card-body">
-                <h5 class="card-title">Active Vials</h5>
-                <p class="display-4">{{ stats.active_vials }}</p>
-            </div>
-        </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-success text-white">
+      <div class="card-body">
+        <h5 class="card-title">Active Vials</h5>
+        <p class="display-4">{{ stats.active_vials }}</p>
+      </div>
     </div>
-    <div class="col-md-3">
-        <div class="card bg-info text-white">
-            <div class="card-body">
-                <h5 class="card-title">This Week</h5>
-                <p class="display-4">{{ stats.injections_this_week }}</p>
-                <small>injections</small>
-            </div>
-        </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-info text-white">
+      <div class="card-body">
+        <h5 class="card-title">This Week</h5>
+        <p class="display-4">{{ stats.injections_this_week }}</p>
+        <small>injections</small>
+      </div>
     </div>
-    <div class="col-md-3">
-        <div class="card bg-warning text-white">
-            <div class="card-body">
-                <h5 class="card-title">Peptides</h5>
-                <p class="display-4">{{ stats.total_peptides }}</p>
-                <small>in database</small>
-            </div>
-        </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card bg-warning text-white">
+      <div class="card-body">
+        <h5 class="card-title">Peptides</h5>
+        <p class="display-4">{{ stats.total_peptides }}</p>
+        <small>in database</small>
+      </div>
     </div>
+  </div>
 </div>
 
 <style>
@@ -111,35 +99,56 @@
       </div>
       <div class="card-body">
         <div class="d-flex flex-wrap gap-2">
+
+          <!-- Scanners (top priority) -->
+          <a class="btn btn-outline-primary explore-btn" href="/scan-peptides?autocam=1">
+            <span class="icon-badge" style="background:#0d6efd"><i class="bi bi-upc-scan"></i></span>
+            <span>Scan Peptides</span>
+          </a>
+
+          <a class="btn btn-outline-primary explore-btn" href="/scan-nutrition?autocam=1">
+            <span class="icon-badge" style="background:#fd7e14"><i class="bi bi-upc-scan"></i></span>
+            <span>Scan Nutrition</span>
+          </a>
+
           <a class="btn btn-outline-primary explore-btn" href="{{ url_for('chat') }}">
-            <span class="icon-badge" style="background:#0d6efd"><i class="bi bi-chat-dots"></i></span>
+            <span class="icon-badge" style="background:#6f42c1"><i class="bi bi-chat-dots"></i></span>
             <span>Pep AI</span>
           </a>
+
           <a class="btn btn-outline-primary explore-btn" href="{{ url_for('peptides') }}">
             <span class="icon-badge" style="background:#20c997"><i class="bi bi-capsule"></i></span>
             <span>Peptides</span>
           </a>
+
           <a class="btn btn-outline-primary explore-btn" href="/nutrition">
-            <span class="icon-badge" style="background:#fd7e14"><i class="bi bi-egg-fried"></i></span>
+            <span class="icon-badge" style="background:#198754"><i class="bi bi-egg-fried"></i></span>
             <span>Nutrition</span>
           </a>
+
           <a class="btn btn-outline-primary explore-btn" href="{{ url_for('calculator') }}">
             <span class="icon-badge" style="background:#0dcaf0"><i class="bi bi-calculator"></i></span>
             <span>Peptide Calculator</span>
           </a>
+
           <a class="btn btn-outline-primary explore-btn" href="{{ url_for('protocols') }}">
-            <span class="icon-badge" style="background:#6f42c1"><i class="bi bi-clipboard2-check"></i></span>
+            <span class="icon-badge" style="background:#0d6efd"><i class="bi bi-clipboard2-check"></i></span>
             <span>Protocols</span>
           </a>
+
           <a class="btn btn-outline-primary explore-btn" href="{{ url_for('vials') }}">
             <span class="icon-badge" style="background:#ffc107"><i class="bi bi-droplet-half"></i></span>
             <span>Vials</span>
           </a>
+
         </div>
         <p class="text-muted mt-2 mb-0">Quick links to the core pages.</p>
       </div>
     </div>
-  <!-- Age Slider (Recommendations) -->
+  </div>
+</div>
+
+<!-- Age Slider (Recommendations) -->
 <div class="card shadow-sm mb-4" id="ageCard">
   <div class="card-header bg-light d-flex align-items-center justify-content-between">
     <div class="fw-semibold">
@@ -201,117 +210,116 @@
 
 <!-- Quick Actions -->
 <div class="card mb-4">
-    <div class="card-header bg-primary text-white">
-        <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Actions</h5>
+  <div class="card-header bg-primary text-white">
+    <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Actions</h5>
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-3">
+        <a href="{{ url_for('log_injection') }}" class="btn btn-lg btn-success w-100">
+          <i class="bi bi-plus-circle"></i><br>Log Injection
+        </a>
+      </div>
+      <div class="col-md-3">
+        <a href="{{ url_for('calculator') }}" class="btn btn-lg btn-info w-100">
+          <i class="bi bi-calculator"></i><br>Peptide Calculator
+        </a>
+      </div>
+      <div class="col-md-3">
+        <a href="{{ url_for('add_vial') }}" class="btn btn-lg btn-warning w-100">
+          <i class="bi bi-box"></i><br>Add Vial
+        </a>
+      </div>
+      <div class="col-md-3">
+        <a href="{{ url_for('add_protocol') }}" class="btn btn-lg btn-primary w-100">
+          <i class="bi bi-calendar-plus"></i><br>New Protocol
+        </a>
+      </div>
     </div>
-    <div class="card-body">
-        <div class="row g-3">
-            <div class="col-md-3">
-                <a href="{{ url_for('log_injection') }}" class="btn btn-lg btn-success w-100">
-                    <i class="bi bi-plus-circle"></i><br>Log Injection
-                </a>
-            </div>
-            <div class="col-md-3">
-                <a href="{{ url_for('calculator') }}" class="btn btn-lg btn-info w-100">
-                    <i class="bi bi-calculator"></i><br>Peptide Calculator
-                </a>
-            </div>
-            <div class="col-md-3">
-                <a href="{{ url_for('add_vial') }}" class="btn btn-lg btn-warning w-100">
-                    <i class="bi bi-box"></i><br>Add Vial
-                </a>
-            </div>
-            <div class="col-md-3">
-                <a href="{{ url_for('add_protocol') }}" class="btn btn-lg btn-primary w-100">
-                    <i class="bi bi-calendar-plus"></i><br>New Protocol
-                </a>
-            </div>
-        </div>
-    </div>
+  </div>
 </div>
 
 <div class="row">
-    <!-- Active Protocols -->
-    <div class="col-md-6 mb-4">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-calendar-check"></i> Active Protocols</h5>
-            </div>
-            <div class="card-body">
-                {% if protocols %}
-                    <div class="list-group list-group-flush">
-                        {% for protocol in protocols %}
-                        <a href="{{ url_for('protocol_detail', protocol_id=protocol.id) }}" 
-                           class="list-group-item list-group-item-action">
-                            <div class="d-flex w-100 justify-content-between">
-                                <h6 class="mb-1">{{ protocol.name }}</h6>
-                                <small class="text-muted">{{ protocol.peptide.name }}</small>
-                            </div>
-                            <p class="mb-1 small">
-                                <span class="badge bg-primary">{{ protocol.dose_mcg }} mcg</span>
-                                <span class="badge bg-info">{{ protocol.frequency_per_day }}x/day</span>
-                            </p>
-                            <small class="text-muted">
-                                Started: {{ protocol.start_date.strftime('%Y-%m-%d') }}
-                                {% if protocol.end_date %}
-                                | Ends: {{ protocol.end_date.strftime('%Y-%m-%d') }}
-                                {% endif %}
-                            </small>
-                        </a>
-                        {% endfor %}
-                    </div>
-                {% else %}
-                    <p class="text-muted text-center py-4">
-                        No active protocols. 
-                        <a href="{{ url_for('add_protocol') }}">Create one now</a>
-                    </p>
+  <!-- Active Protocols -->
+  <div class="col-md-6 mb-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-calendar-check"></i> Active Protocols</h5>
+      </div>
+      <div class="card-body">
+        {% if protocols %}
+          <div class="list-group list-group-flush">
+            {% for protocol in protocols %}
+            <a href="{{ url_for('protocol_detail', protocol_id=protocol.id) }}" class="list-group-item list-group-item-action">
+              <div class="d-flex w-100 justify-content-between">
+                <h6 class="mb-1">{{ protocol.name }}</h6>
+                <small class="text-muted">{{ protocol.peptide.name }}</small>
+              </div>
+              <p class="mb-1 small">
+                <span class="badge bg-primary">{{ protocol.dose_mcg }} mcg</span>
+                <span class="badge bg-info">{{ protocol.frequency_per_day }}x/day</span>
+              </p>
+              <small class="text-muted">
+                Started: {{ protocol.start_date.strftime('%Y-%m-%d') }}
+                {% if protocol.end_date %}
+                | Ends: {{ protocol.end_date.strftime('%Y-%m-%d') }}
                 {% endif %}
-            </div>
-        </div>
+              </small>
+            </a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="text-muted text-center py-4">
+            No active protocols.
+            <a href="{{ url_for('add_protocol') }}">Create one now</a>
+          </p>
+        {% endif %}
+      </div>
     </div>
+  </div>
 
-    <!-- Recent Injections -->
-    <div class="col-md-6 mb-4">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Injections</h5>
-            </div>
-            <div class="card-body">
-                {% if recent_injections %}
-                    <div class="list-group list-group-flush">
-                        {% for injection in recent_injections %}
-                        <div class="list-group-item">
-                            <div class="d-flex w-100 justify-content-between">
-                                <h6 class="mb-1">{{ injection.protocol.peptide.name }}</h6>
-                                <small>{{ injection.timestamp.strftime('%m/%d %H:%M') }}</small>
-                            </div>
-                            <p class="mb-1 small">
-                                <strong>{{ injection.dose_mcg }} mcg</strong> 
-                                ({{ injection.volume_ml }} ml)
-                                {% if injection.injection_site %}
-                                | {{ injection.injection_site }}
-                                {% endif %}
-                            </p>
-                            {% if injection.subjective_notes %}
-                            <small class="text-muted">{{ injection.subjective_notes[:100] }}</small>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                    <div class="text-center mt-3">
-                        <a href="{{ url_for('history') }}" class="btn btn-sm btn-outline-primary">
-                            View All History
-                        </a>
-                    </div>
-                {% else %}
-                    <p class="text-muted text-center py-4">
-                        No injections logged yet. 
-                        <a href="{{ url_for('log_injection') }}">Log your first one</a>
-                    </p>
+  <!-- Recent Injections -->
+  <div class="col-md-6 mb-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Injections</h5>
+      </div>
+      <div class="card-body">
+        {% if recent_injections %}
+          <div class="list-group list-group-flush">
+            {% for injection in recent_injections %}
+            <div class="list-group-item">
+              <div class="d-flex w-100 justify-content-between">
+                <h6 class="mb-1">{{ injection.protocol.peptide.name }}</h6>
+                <small>{{ injection.timestamp.strftime('%m/%d %H:%M') }}</small>
+              </div>
+              <p class="mb-1 small">
+                <strong>{{ injection.dose_mcg }} mcg</strong>
+                ({{ injection.volume_ml }} ml)
+                {% if injection.injection_site %}
+                | {{ injection.injection_site }}
                 {% endif %}
+              </p>
+              {% if injection.subjective_notes %}
+              <small class="text-muted">{{ injection.subjective_notes[:100] }}</small>
+              {% endif %}
             </div>
-        </div>
+            {% endfor %}
+          </div>
+          <div class="text-center mt-3">
+            <a href="{{ url_for('history') }}" class="btn btn-sm btn-outline-primary">
+              View All History
+            </a>
+          </div>
+        {% else %}
+          <p class="text-muted text-center py-4">
+            No injections logged yet.
+            <a href="{{ url_for('log_injection') }}">Log your first one</a>
+          </p>
+        {% endif %}
+      </div>
     </div>
+  </div>
 </div>
 
 <!-- Coaching CTA -->
@@ -323,8 +331,8 @@
           <div>
             <h4 class="mb-1">Coaching</h4>
             <p class="text-muted mb-2">Do you have personal questions about peptides, longevity, or whether this is right for you? Or would you like help maximizing your experience with a personalized plan for training and recovery?</p>
-<p class="text-muted mb-2">I also specialize in at-home training and home bodybuilding, and can help you build effective routines that work with minimal equipment and realistic schedules.</p>
-<p class="text-muted mb-0">Feel free to book a coaching call to get started, ask questions, or talk through whatever you&rsquo;d like.</p>
+            <p class="text-muted mb-2">I also specialize in at-home training and home bodybuilding, and can help you build effective routines that work with minimal equipment and realistic schedules.</p>
+            <p class="text-muted mb-0">Feel free to book a coaching call to get started, ask questions, or talk through whatever you&rsquo;d like.</p>
           </div>
           <div class="d-flex flex-column flex-sm-row gap-2">
             <a class="btn btn-primary btn-lg" href="{{ url_for('coaching') }}"><i class="bi bi-calendar2-check me-2"></i>Book a coaching call</a>

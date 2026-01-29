@@ -34,6 +34,13 @@ from nutrition_api import register_nutrition_routes
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
+# -----------------------------------------------------------------------------
+# Helper: check endpoint exists (usable from routes and templates)
+# -----------------------------------------------------------------------------
+def has_endpoint(name: str) -> bool:
+    return name in app.view_functions
+
+
 # Jinja filter for parsing JSON in templates
 @app.template_filter('from_json')
 def from_json_filter(value):
@@ -185,7 +192,7 @@ def login_required(f):
         # Since profile setup is now integrated into the dashboard, we allow the dashboard
         # to load even if the profile is incomplete, and we redirect other protected pages
         # back to the dashboard until the profile is completed.
-        if f.__name__ not in ("profile_setup", "dashboard", "chat", "api_chat"):
+        if f.__name__ not in ("profile_setup", "dashboard", "chat", "api_chat", "scan_food", "scan_peptides", "scan_nutrition"):
             db = get_session(db_url)
             try:
                 profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
@@ -253,13 +260,13 @@ class AnonymousUser:
     is_authenticated = False
     tier = "free"
     email = None
+    profile_completed = False
+    disclaimer_accepted_at = None
 
 @app.context_processor
 def inject_template_helpers():
     user = get_current_user()
 
-    def has_endpoint(name: str) -> bool:
-        return name in app.view_functions
 
     if not user:
         # Not logged in
@@ -272,6 +279,20 @@ def inject_template_helpers():
 
     # Logged in
     user.is_authenticated = True
+    # Attach onboarding convenience attrs expected by templates
+    try:
+        db = get_session(db_url)
+        try:
+            prof = db.query(UserProfile).filter_by(user_id=user.id).first()
+            user.profile_completed = bool(prof and prof.completed_at)
+            disc = db.query(DisclaimerAcceptance).filter_by(user_id=user.id).first()
+            user.disclaimer_accepted_at = getattr(disc, "accepted_at", None) if disc else None
+        finally:
+            db.close()
+    except Exception:
+        user.profile_completed = False
+        user.disclaimer_accepted_at = None
+
     if not getattr(user, "tier", None):
         user.tier = "free"
 
@@ -568,7 +589,8 @@ def scan_food():
   </div>
 
   <!-- TFJS + MobileNet (open source, browser-side) -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js">
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js"></script>
+  <script>
       // --- Mobile camera support (direct capture) ---
       let cameraStream = null;
 
@@ -892,15 +914,28 @@ def scan_food():
 @app.route("/scan-nutrition", methods=["GET"])
 @login_required
 def scan_nutrition():
-    # Alias route for clarity in the top nav; use existing Nutrition page.
-    return redirect(url_for("nutrition")) if has_endpoint("nutrition") else redirect("/nutrition")
+    """Top-nav alias.
+
+    This used to 500 because `has_endpoint()` was only defined inside a template context.
+    """
+    if has_endpoint("nutrition"):
+        return redirect(url_for("nutrition"))
+    return redirect("/nutrition")
 
 
 @app.route("/scan-peptides", methods=["GET"])
 @login_required
 def scan_peptides():
     peptides = _load_peptides_list()
-    peptide_names = [p.get("name","") for p in peptides if p.get("name")]
+    peptide_names = []
+    for p in peptides:
+        name = None
+        if isinstance(p, dict):
+            name = p.get("name")
+        else:
+            name = getattr(p, "name", None)
+        if name:
+            peptide_names.append(str(name))
 
     html = """<!doctype html>
 <html>
@@ -1134,7 +1169,6 @@ def logout():
 
 @app.route("/dashboard")
 @login_required
-@require_onboarding
 def dashboard():
     stats, protocols, recent_injections = _compute_dashboard_context()
     profile = get_user_profile(session["user_id"])
@@ -1601,7 +1635,9 @@ def log_food():
                     # Save to database
                     db = get_session(db_url)
                     try:
-                        food_log = FoodLog(                            description=food_description,
+                        food_log = FoodLog(
+                            user_id=session["user_id"],
+                            description=food_description,
                             total_calories=total_calories,
                             total_protein_g=total_protein,
                             total_fat_g=total_fat,
@@ -1672,7 +1708,9 @@ def api_log_food():
         
         db = get_session(db_url)
         try:
-            food_log = FoodLog(                description=description,
+            food_log = FoodLog(
+                user_id=session["user_id"],
+                description=description,
                 total_calories=total_calories,
                 total_protein_g=total_protein_g,
                 total_fat_g=total_fat_g,
