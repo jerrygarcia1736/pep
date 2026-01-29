@@ -935,39 +935,58 @@ def peptide_calculator():
     - GET: show calculator UI
     - POST: (optional) save a protocol using the entered values
     """
-    db = PeptideDB(db_session)
-    peptides = db.list_peptides()
+
+    # Prefer the project's DB helper if available; otherwise fall back to a safe empty list
+    peptides = _load_peptides_list()
 
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
         if action == "save_protocol":
             try:
-                peptide_id = int(request.form.get("peptide_id") or 0)
-                protocol_name = (request.form.get("protocol_name") or "").strip() or "New Protocol"
-                desired_dose_mcg = float(request.form.get("desired_dose_mcg") or 0)
-                injections_per_day = int(request.form.get("injections_per_day") or 1)
+                from database import PeptideDB  # type: ignore
 
-                vial_size_mg = (request.form.get("vial_size_mg") or "").strip()
-                water_ml = (request.form.get("water_ml") or "").strip()
+                db_session = get_session(db_url)
+                try:
+                    pdb = PeptideDB(db_session)
 
-                notes_bits = []
-                if vial_size_mg:
-                    notes_bits.append(f"Vial size: {vial_size_mg} mg")
-                if water_ml:
-                    notes_bits.append(f"Bacteriostatic water: {water_ml} ml")
-                notes_bits.append("Saved from Peptide Calculator.")
-                notes = " • ".join([b for b in notes_bits if b])
+                    peptide_id = int(request.form.get("peptide_id") or 0)
+                    protocol_name = (request.form.get("protocol_name") or "").strip() or "New Protocol"
+                    desired_dose_mcg = float(request.form.get("desired_dose_mcg") or 0)
+                    injections_per_day = int(request.form.get("injections_per_day") or 1)
 
-                db.create_protocol(
-                    peptide_id=peptide_id,
-                    name=protocol_name,
-                    dose_mcg=desired_dose_mcg,
-                    frequency_per_day=injections_per_day,
-                    notes=notes
-                )
-                flash("Protocol saved.", "success")
-                return redirect(url_for("protocols"))
+                    vial_size_mg = (request.form.get("vial_size_mg") or "").strip()
+                    water_ml = (request.form.get("water_ml") or "").strip()
+
+                    notes_bits = []
+                    if vial_size_mg:
+                        notes_bits.append(f"Vial size: {vial_size_mg} mg")
+                    if water_ml:
+                        notes_bits.append(f"Bacteriostatic water: {water_ml} ml")
+                    notes_bits.append("Saved from Peptide Calculator.")
+                    notes = " • ".join([b for b in notes_bits if b])
+
+                    create_fn = getattr(pdb, "create_protocol", None) or getattr(pdb, "add_protocol", None)
+                    if not callable(create_fn):
+                        raise RuntimeError("Database helper does not implement create_protocol()/add_protocol().")
+
+                    create_fn(
+                        peptide_id=peptide_id,
+                        name=protocol_name,
+                        dose_mcg=desired_dose_mcg,
+                        frequency_per_day=injections_per_day,
+                        notes=notes,
+                    )
+                    db_session.commit()
+                    flash("Protocol saved.", "success")
+                    return redirect(url_for("protocols"))
+                finally:
+                    try:
+                        db_session.close()
+                    except Exception:
+                        pass
+
             except Exception as e:
+                app.logger.exception("Could not save protocol from calculator")
                 flash(f"Could not save protocol: {e}", "danger")
 
     return render_template("calculator.html", peptides=peptides)
