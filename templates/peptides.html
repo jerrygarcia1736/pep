@@ -6,7 +6,7 @@
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-3">
   <div>
     <h1 class="mb-1"><i class="bi bi-list-task"></i> Peptide Library</h1>
-    <div class="text-muted">Select 2–4 peptides to compare side-by-side with visuals. (Educational UI only — not medical advice.)</div>
+    <div class="text-muted">Select 2–4 peptides to compare side-by-side. (Educational UI only — not medical advice.)</div>
   </div>
 
   <button class="btn btn-primary d-inline-flex align-items-center gap-2" id="compareBtn" disabled>
@@ -48,19 +48,31 @@
 </div>
 {% else %}
 <div class="alert alert-warning">
-  No peptides found. This page expects your app to pass a <code>peptides</code> list to the template.
+  No peptides found.
 </div>
 {% endif %}
 
 <div class="modal fade" id="compareModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-bar-chart"></i> Compare</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <h5 class="modal-title"><i class="bi bi-bar-chart"></i> Compare Peptides</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <div id="compareSelection" class="text-muted">Select 2–4 peptides to compare.</div>
+        <div id="compareLoading" class="text-muted">Loading comparison…</div>
+        <div class="table-responsive d-none" id="compareTableWrap">
+          <table class="table table-bordered align-middle">
+            <thead class="table-light">
+              <tr id="compareHead"></tr>
+            </thead>
+            <tbody>
+              <tr id="compareCategory"></tr>
+              <tr id="compareSummary"></tr>
+              <tr id="compareBenefits"></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -68,7 +80,6 @@
     </div>
   </div>
 </div>
-
 {% endblock %}
 
 {% block scripts %}
@@ -79,19 +90,19 @@
   const checks = Array.from(document.querySelectorAll('.compare-check'));
   const compareBtn = document.getElementById('compareBtn');
   const compareCount = document.getElementById('compareCount');
-  const selectionEl = document.getElementById('compareSelection');
+
+  function selectedIds(){
+    return checks.filter(c => c.checked).map(c => c.value);
+  }
 
   function updateCompareState(){
-    const selected = checks.filter(c => c.checked).map(c => c.value);
-    compareCount.textContent = String(selected.length);
-    compareBtn.disabled = !(selected.length >= 2 && selected.length <= 4);
-    if(selected.length >= 4){
+    const sel = selectedIds();
+    compareCount.textContent = String(sel.length);
+    compareBtn.disabled = !(sel.length >= 2 && sel.length <= 4);
+    if(sel.length >= 4){
       checks.filter(c => !c.checked).forEach(c => c.disabled = true);
     } else {
       checks.forEach(c => c.disabled = false);
-    }
-    if(selectionEl){
-      selectionEl.textContent = selected.length ? ("Selected IDs: " + selected.join(', ')) : "Select 2–4 peptides to compare.";
     }
   }
 
@@ -108,13 +119,42 @@
   checks.forEach(c => c.addEventListener('change', updateCompareState));
   updateCompareState();
 
-  if(compareBtn){
-    compareBtn.addEventListener('click', () => {
-      const modalEl = document.getElementById('compareModal');
-      if(!modalEl) return;
-      const modal = new bootstrap.Modal(modalEl);
-      modal.show();
+  async function openCompare(){
+    const ids = selectedIds();
+    const modalEl = document.getElementById('compareModal');
+    const loading = document.getElementById('compareLoading');
+    const wrap = document.getElementById('compareTableWrap');
+    const head = document.getElementById('compareHead');
+    const cat = document.getElementById('compareCategory');
+    const sum = document.getElementById('compareSummary');
+    const ben = document.getElementById('compareBenefits');
+
+    loading.classList.remove('d-none');
+    wrap.classList.add('d-none');
+    head.innerHTML = '<th></th>';
+    cat.innerHTML = '<th>Category</th>';
+    sum.innerHTML = '<th>Summary</th>';
+    ben.innerHTML = '<th>Benefits</th>';
+
+    const res = await fetch('/api/peptides?ids=' + ids.join(','));
+    const data = await res.json();
+
+    data.forEach(p => {
+      head.insertAdjacentHTML('beforeend', `<th>${p.name || ''}</th>`);
+      cat.insertAdjacentHTML('beforeend', `<td>${p.category || ''}</td>`);
+      sum.insertAdjacentHTML('beforeend', `<td>${p.summary || ''}</td>`);
+      ben.insertAdjacentHTML('beforeend', `<td>${p.benefits || ''}</td>`);
     });
+
+    loading.classList.add('d-none');
+    wrap.classList.remove('d-none');
+
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
+  }
+
+  if(compareBtn){
+    compareBtn.addEventListener('click', openCompare);
   }
 })();
 </script>

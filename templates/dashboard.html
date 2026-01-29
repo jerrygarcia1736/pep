@@ -27,7 +27,7 @@
 <!-- Stats Cards -->
 <div class="row g-4 mb-4">
   <div class="col-md-3">
-    <div class="card bg-primary text-white">
+    <div class="card bg-primary text-white stat-card">
       <div class="card-body">
         <h5 class="card-title">Active Protocols</h5>
         <p class="display-4">{{ stats.active_protocols }}</p>
@@ -35,7 +35,7 @@
     </div>
   </div>
   <div class="col-md-3">
-    <div class="card bg-success text-white">
+    <div class="card bg-success text-white stat-card">
       <div class="card-body">
         <h5 class="card-title">Active Vials</h5>
         <p class="display-4">{{ stats.active_vials }}</p>
@@ -43,7 +43,7 @@
     </div>
   </div>
   <div class="col-md-3">
-    <div class="card bg-info text-white">
+    <div class="card bg-info text-white stat-card">
       <div class="card-body">
         <h5 class="card-title">This Week</h5>
         <p class="display-4">{{ stats.injections_this_week }}</p>
@@ -52,7 +52,7 @@
     </div>
   </div>
   <div class="col-md-3">
-    <div class="card bg-warning text-white">
+    <div class="card bg-warning text-white stat-card">
       <div class="card-body">
         <h5 class="card-title">Peptides</h5>
         <p class="display-4">{{ stats.total_peptides }}</p>
@@ -88,6 +88,37 @@
     font-size: 1.35rem;
     line-height: 1;
   }
+
+  /* Make stat cards shorter */
+  .stat-card .card-body{ padding: 0.9rem 1rem; }
+  .stat-card .card-title{ margin-bottom: .35rem; font-size: 1.05rem; }
+  .stat-card .display-4{ font-size: 2.7rem; margin: 0; line-height: 1; }
+
+  /* Explore: single row on desktop, scroll on smaller screens */
+  .explore-card .explore-row{
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: .25rem;
+  }
+  .explore-card .explore-row::-webkit-scrollbar{ height: 8px; }
+  .explore-card .explore-row::-webkit-scrollbar-thumb{ background: rgba(0,0,0,.15); border-radius: 999px; }
+
+  .explore-card .explore-btn{
+    padding: .35rem .55rem;
+    gap: .5rem;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  /* bigger icon badge, but tighter tile */
+  .explore-card .explore-btn .icon-badge{
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    font-size: 1.5rem;
+  }
+  .explore-card .explore-btn span{ font-size: .95rem; font-weight: 600; }
+
 </style>
 
 <!-- Explore Section -->
@@ -98,7 +129,7 @@
         <h5 class="mb-0"><i class="bi bi-compass me-2"></i>Explore</h5>
       </div>
       <div class="card-body">
-        <div class="d-flex flex-wrap gap-2">
+        <div class="d-flex gap-2 explore-row">
 
           <!-- Scanners (top priority) -->
           <a class="btn btn-outline-primary explore-btn" href="/scan-peptides?autocam=1">
@@ -170,7 +201,7 @@
 
         <div class="mt-3">
           <div class="fw-semibold mb-2"><i class="bi bi-bullseye"></i> Goals</div>
-          <div class="d-flex flex-wrap gap-2">
+          <div class="d-flex gap-2 explore-row">
             <input type="checkbox" class="btn-check goalToggle" id="gFat" autocomplete="off" value="fat_loss">
             <label class="btn btn-outline-primary btn-sm" for="gFat"><i class="bi bi-fire"></i> Fat loss</label>
 
