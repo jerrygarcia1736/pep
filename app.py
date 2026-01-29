@@ -159,13 +159,16 @@ def login_required(f):
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
         
-        # Check if user has completed profile (skip for profile_setup route itself)
-        if f.__name__ != 'profile_setup':
+        # Check if user has completed profile.
+        # Since profile setup is now integrated into the dashboard, we allow the dashboard
+        # to load even if the profile is incomplete, and we redirect other protected pages
+        # back to the dashboard until the profile is completed.
+        if f.__name__ not in ("profile_setup", "dashboard"):
             db = get_session(db_url)
             try:
                 profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
                 if not profile or not profile.completed_at:
-                    return redirect(url_for("profile_setup"))
+                    return redirect(url_for("dashboard"))
             finally:
                 db.close()
         
@@ -360,6 +363,15 @@ def index():
     if "user_id" in session:
         return redirect(url_for("dashboard"))
     return render_if_exists("index.html", fallback_endpoint="register")
+
+# -----------------------------------------------------------------------------
+# Medical Disclaimer
+# -----------------------------------------------------------------------------
+@app.route("/medical-disclaimer")
+def medical_disclaimer():
+    """Medical disclaimer page (linked from the global banner)."""
+    return render_if_exists("medical_disclaimer.html", fallback_endpoint="index")
+
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
