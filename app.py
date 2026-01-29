@@ -459,7 +459,6 @@ PROTOCOL_TEMPLATES: dict[str, dict[str, str]] = {
 
 @app.route("/scan-food", methods=["GET"])
 @login_required
-@require_onboarding
 def scan_food():
     # Posts recognized food directly into /log-food via form POST (no template changes needed)
     html = """<!doctype html>
