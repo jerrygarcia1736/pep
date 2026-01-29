@@ -1,9 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Pep AI - Peptide Tracker{% endblock %}
-
-{% block content %}
-
+{% block title %}Pep AI - Peptide Tracker
 <!-- Upgrade Modal -->
 <div class="modal fade" id="upgradeModal" tabindex="-1" aria-labelledby="upgradeModalLabel" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
@@ -23,80 +20,52 @@
   </div>
 </div>
 
-<div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
-  <div>
-    <h1 class="mb-1">
-      <i class="bi bi-chat-dots"></i> Pep AI
-    </h1>
-    <div class="text-muted">
-      Ask about research, calculations, and (when available) insights from your protocols, logs, and inventory.
-    </div>
-  </div>
+{% endblock %}
 
-  <div class="d-flex align-items-center gap-2 flex-wrap">
-    <a class="btn btn-sm btn-outline-success" href="/scan-food">
+{% block content %}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+  <h1 class="mb-0">
+    <i class="bi bi-chat-dots"></i> Pep AI
+  </h1>
+  <div class="d-flex gap-2">
+    <a href="/scan-food" class="btn btn-outline-primary btn-sm">
       <i class="bi bi-camera"></i> Scan Food
     </a>
-    <a class="btn btn-sm btn-outline-primary" href="/scan-peptides">
-      <i class="bi bi-box-seam"></i> Scan Peptides
+    <a href="/scan-peptides" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-upc-scan"></i> Scan Peptides
     </a>
-    <span class="badge bg-secondary align-self-start">Educational only</span>
   </div>
+  <span class="badge bg-secondary">Educational only</span>
 </div>
 
-<div class="alert alert-warning d-flex align-items-start justify-content-between gap-3" role="alert">
-  <div>
-    <strong>Educational Tool Only:</strong> Pep AI provides general research summaries and math help (e.g., reconstitution).
-    It does not provide medical advice. Consult a licensed healthcare professional for medical decisions.
-  </div>
-  <button class="btn btn-sm btn-outline-dark" type="button" id="dismissDisclaimer" aria-label="Dismiss disclaimer">
-    <i class="bi bi-x-lg"></i>
-  </button>
+<div class="alert alert-warning" role="alert">
+  <strong>Educational Tool Only:</strong> Pep AI provides general research summaries and math help (e.g., reconstitution).
+  It does not provide medical advice. Consult a licensed healthcare professional for medical decisions.
 </div>
 
 <div class="card shadow-sm border-0">
-  <div class="card-header bg-white d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <div class="card-header bg-white d-flex align-items-center justify-content-between">
     <div class="fw-semibold">Chat</div>
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-      <button class="btn btn-sm btn-outline-secondary" id="clearBtn" type="button">
-        <i class="bi bi-trash"></i> Clear
-      </button>
-    </div>
+    <button class="btn btn-sm btn-outline-secondary" id="clearBtn" type="button">
+      <i class="bi bi-trash"></i> Clear
+    </button>
   </div>
 
   <div class="card-body" style="height: 55vh; overflow:auto;" id="chatWindow" aria-live="polite">
-
-    <div id="emptyState" class="py-3">
-      <div class="text-muted mb-3">
-        Not sure what to ask? Try one of these:
-      </div>
-      <div class="d-flex flex-wrap gap-2" id="promptChips">
-        <button type="button" class="btn btn-sm btn-light border prompt-chip">🧪 What peptides am I taking today?</button>
-        <button type="button" class="btn btn-sm btn-light border prompt-chip">📦 How long until my BPC vial runs out?</button>
-        <button type="button" class="btn btn-sm btn-light border prompt-chip">🧮 Help me with reconstitution math</button>
-        <button type="button" class="btn btn-sm btn-light border prompt-chip">😴 What changed my sleep last week?</button>
-        <button type="button" class="btn btn-sm btn-light border prompt-chip">📚 Summarize the evidence for BPC-157</button>
-        <button type="button" class="btn btn-sm btn-light border prompt-chip">🥗 How many calories did I log today?</button>
-      </div>
-
-      <hr class="my-3"/>
-
-      <div class="small text-muted">
-        Tip: You can paste a study abstract or ask “summarize the evidence for …”.
-      </div>
+    <div class="text-muted small">
+      Ask about mechanisms, study summaries, common research ranges, or use Pep AI for calculation help.
     </div>
-
   </div>
 
   <div class="card-footer bg-white">
     <form id="chatForm" class="d-flex gap-2">
-      <input class="form-control" id="messageInput" placeholder="Ask Pep AI about peptides, nutrition, or your logs…" autocomplete="off" />
-      <button class="btn btn-primary" type="submit" id="sendBtn" aria-label="Send">
+      <input class="form-control" id="messageInput" placeholder="Type your question..." autocomplete="off" />
+      <button class="btn btn-primary" type="submit" id="sendBtn">
         <i class="bi bi-send"></i>
       </button>
     </form>
     <div class="small text-muted mt-2">
-      Pro tip: Keep it short. You can ask follow-ups.
+      Tip: You can paste a study abstract or ask “summarize the evidence for …”.
     </div>
   </div>
 </div>
@@ -110,24 +79,6 @@
   const input = document.getElementById("messageInput");
   const clearBtn = document.getElementById("clearBtn");
   const sendBtn = document.getElementById("sendBtn");
-  const emptyState = document.getElementById("emptyState");
-  const dismissDisclaimer = document.getElementById("dismissDisclaimer");
-  const disclaimerKey = "pep_ai_disclaimer_dismissed_v1";
-
-  // Dismiss disclaimer (per-browser)
-  try{
-    if (localStorage.getItem(disclaimerKey) === "1"){
-      const alertEl = dismissDisclaimer && dismissDisclaimer.closest(".alert");
-      if (alertEl) alertEl.remove();
-    }
-  }catch(e){}
-  if (dismissDisclaimer){
-    dismissDisclaimer.addEventListener("click", () => {
-      const alertEl = dismissDisclaimer.closest(".alert");
-      if (alertEl) alertEl.remove();
-      try{ localStorage.setItem(disclaimerKey, "1"); }catch(e){}
-    });
-  }
 
   function el(tag, cls, text){
     const e = document.createElement(tag);
@@ -136,16 +87,7 @@
     return e;
   }
 
-  function hideEmptyState(){
-    if (emptyState) emptyState.style.display = "none";
-  }
-
-  function showEmptyState(){
-    if (emptyState) emptyState.style.display = "block";
-  }
-
   function addBubble(role, text){
-    hideEmptyState();
     const wrap = el("div", "d-flex mb-3 " + (role === "user" ? "justify-content-end" : "justify-content-start"));
     const bubble = el("div", "p-3 rounded-4 " + (role === "user" ? "bg-primary text-white" : "bg-light border"));
     bubble.style.maxWidth = "85%";
@@ -165,19 +107,15 @@
 
   // Load history
   const KEY = "pep_ai_chat_history_v1";
-  let loadedAny = false;
   try{
     const saved = JSON.parse(localStorage.getItem(KEY) || "[]");
-    if (saved.length){
-      loadedAny = true;
-      saved.forEach(m => addBubble(m.role, m.text));
-    }
+    saved.forEach(m => addBubble(m.role, m.text));
   }catch(e){}
-  if (!loadedAny) showEmptyState();
 
   function saveHistory(){
     const bubbles = chatWindow.querySelectorAll(".rounded-4");
     const msgs = [];
+    // Skip the first tip text if no messages
     bubbles.forEach(b => {
       const isUser = b.classList.contains("bg-primary");
       msgs.push({ role: isUser ? "user" : "assistant", text: b.textContent });
@@ -186,14 +124,18 @@
   }
 
   clearBtn.addEventListener("click", () => {
-    chatWindow.innerHTML = "";
+    chatWindow.innerHTML = '<div class="text-muted small">Ask about mechanisms, study summaries, common research ranges, or use Pep AI for calculation help.</div>';
     localStorage.removeItem(KEY);
-    showEmptyState();
   });
 
-  async function sendMessage(msg){
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = (input.value || "").trim();
+    if (!msg) return;
+
     addBubble("user", msg);
     saveHistory();
+    input.value = "";
     setLoading(true);
 
     try{
@@ -213,6 +155,7 @@
         return;
       }
 
+      // Accept either {reply: "..."} or {message:"..."} depending on your backend
       const reply = data.reply || data.message || data.content || "";
       addBubble("assistant", reply || "No response received.");
       saveHistory();
@@ -223,23 +166,6 @@
       setLoading(false);
       input.focus();
     }
-  }
-
-  // Prompt chips
-  document.querySelectorAll(".prompt-chip").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const txt = (btn.textContent || "").trim();
-      if (!txt) return;
-      sendMessage(txt);
-    });
-  });
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const msg = (input.value || "").trim();
-    if (!msg) return;
-    input.value = "";
-    await sendMessage(msg);
   });
 
 })();
