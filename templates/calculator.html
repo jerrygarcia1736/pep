@@ -1,134 +1,136 @@
 {% extends "base.html" %}
-
-{% block title %}Calculator - Peptide Tracker{% endblock %}
+{% block title %}Reconstitution Calculator{% endblock %}
 
 {% block content %}
-<h1 class="mb-4">
-    <i class="bi bi-calculator"></i> Reconstitution Calculator
-</h1>
-
-<div class="row">
-    <div class="col-lg-6">
-        <div class="card">
-            <div class="card-header bg-info text-white">
-                <h5 class="mb-0">Calculate Dosage</h5>
-            </div>
-            <div class="card-body">
-                <form method="POST">
-                    <div class="mb-3">
-                        <label for="peptide_name" class="form-label">Peptide</label>
-                        <select class="form-select" id="peptide_name" name="peptide_name" required>
-                            <option value="">Select a peptide...</option>
-                            {% for peptide in peptides %}
-                            <option value="{{ peptide.name }}">{{ peptide.name }} ({{ peptide.common_name }})</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label for="mg_amount" class="form-label">Vial Size (mg)</label>
-                        <input type="number" step="0.1" class="form-control" id="mg_amount" 
-                               name="mg_amount" placeholder="5" required>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label for="ml_water" class="form-label">Bacteriostatic Water (ml)</label>
-                        <input type="number" step="0.1" class="form-control" id="ml_water" 
-                               name="ml_water" placeholder="2" required>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label for="dose_mcg" class="form-label">Desired Dose (mcg)</label>
-                        <input type="number" step="1" class="form-control" id="dose_mcg" 
-                               name="dose_mcg" placeholder="250" required>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label for="doses_per_day" class="form-label">Injections Per Day</label>
-                        <input type="number" step="1" class="form-control" id="doses_per_day" 
-                               name="doses_per_day" placeholder="2" required>
-                    </div>
-                    
-                    <div class="d-grid">
-                        <button type="submit" class="btn btn-info btn-lg">
-                            <i class="bi bi-calculator"></i> Calculate
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-lg-6">
-        {% if result %}
-        <div class="card border-success">
-            <div class="card-header bg-success text-white">
-                <h5 class="mb-0"><i class="bi bi-check-circle"></i> Results</h5>
-            </div>
-            <div class="card-body">
-                <h4 class="mb-3">{{ result.peptide }}</h4>
-                
-                <div class="alert alert-info">
-                    <h5><i class="bi bi-flask"></i> Vial Preparation</h5>
-                    <ul class="mb-0">
-                        <li>Peptide amount: <strong>{{ result.vial_size_mg }} mg</strong></li>
-                        <li>Add water: <strong>{{ result.water_added_ml }} ml</strong></li>
-                        <li>Final concentration: <strong>{{ result.concentration_mcg_per_ml }} mcg/ml</strong></li>
-                    </ul>
-                </div>
-                
-                <div class="alert alert-success">
-                    <h5><i class="bi bi-syringe"></i> Dosing Instructions</h5>
-                    <ul class="mb-0">
-                        <li>Target dose: <strong>{{ result.target_dose_mcg }} mcg</strong></li>
-                        <li>Inject volume: <strong>{{ result.dose_volume_ml }} ml</strong></li>
-                        <li>Syringe units: <strong>{{ result.syringe_units }} units</strong> (insulin syringe)</li>
-                        <li>Frequency: <strong>{{ result.doses_per_day }}x per day</strong></li>
-                    </ul>
-                </div>
-                
-                <div class="alert alert-warning">
-                    <h5><i class="bi bi-calendar3"></i> Vial Lifespan</h5>
-                    <ul class="mb-0">
-                        <li>Total doses: <strong>{{ result.total_doses_in_vial }}</strong></li>
-                        <li>Will last: <strong>{{ result.vial_lasts_days }} days</strong></li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-        {% else %}
-        <div class="card">
-            <div class="card-body text-center py-5">
-                <i class="bi bi-calculator text-muted" style="font-size: 4rem;"></i>
-                <p class="text-muted mt-3">
-                    Enter vial details to calculate reconstitution
-                </p>
-            </div>
-        </div>
-        {% endif %}
-    </div>
+<div class="d-flex align-items-center gap-2 mb-4">
+  <div style="font-size:28px">🧮</div>
+  <div>
+    <h1 class="mb-0">Reconstitution Calculator</h1>
+  </div>
 </div>
 
-<div class="row mt-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-info-circle"></i> How to Use</h5>
-            </div>
-            <div class="card-body">
-                <ol>
-                    <li><strong>Select your peptide</strong> from the dropdown</li>
-                    <li><strong>Enter vial size</strong> in milligrams (usually 2mg, 5mg, 10mg)</li>
-                    <li><strong>Enter water amount</strong> to add (usually 1-3ml)</li>
-                    <li><strong>Enter desired dose</strong> per injection in micrograms</li>
-                    <li><strong>Enter frequency</strong> (how many times per day)</li>
-                </ol>
-                <p class="mb-0">
-                    The calculator will tell you the concentration, exact volume to inject, 
-                    syringe units, and how long the vial will last.
-                </p>
-            </div>
-        </div>
+<div class="row g-4">
+  <div class="col-12 col-lg-6">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-info text-white">
+        <div class="fw-semibold">Calculate Dosage</div>
+      </div>
+      <div class="card-body">
+        <form id="calcForm" method="post" action="{{ url_for('peptide_calculator') }}">
+          <input type="hidden" name="action" id="action" value="">
+
+          <div class="mb-3">
+            <label class="form-label">Peptide</label>
+            <select class="form-select" name="peptide_id" id="peptide_id" required>
+              <option value="">Select a peptide...</option>
+              {% for p in peptides %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Vial Size (mg)</label>
+            <input class="form-control" type="number" step="0.1" min="0" name="vial_size_mg" id="vial_size_mg" value="5" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Bacteriostatic Water (ml)</label>
+            <input class="form-control" type="number" step="0.1" min="0" name="water_ml" id="water_ml" value="2" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Desired Dose (mcg)</label>
+            <input class="form-control" type="number" step="1" min="0" name="desired_dose_mcg" id="desired_dose_mcg" value="250" required>
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label">Injections Per Day</label>
+            <input class="form-control" type="number" step="1" min="1" name="injections_per_day" id="injections_per_day" value="2" required>
+          </div>
+
+          <button type="button" class="btn btn-info w-100 text-white" onclick="calculate()">
+            🧮 Calculate
+          </button>
+
+          <hr class="my-4">
+
+          <div class="mb-2 fw-semibold">Save as Protocol</div>
+          <div class="mb-3">
+            <label class="form-label">Protocol Name</label>
+            <input class="form-control" type="text" name="protocol_name" id="protocol_name" placeholder="e.g., BPC-157 Recovery">
+          </div>
+
+          <button type="submit" class="btn btn-primary w-100" onclick="document.getElementById('action').value='save_protocol';">
+            💾 Save Protocol
+          </button>
+
+          <div class="form-text mt-2">
+            Saving creates a protocol using the selected peptide, desired dose (mcg), and injections/day.
+          </div>
+        </form>
+      </div>
     </div>
+  </div>
+
+  <div class="col-12 col-lg-6">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-body d-flex flex-column justify-content-center align-items-center text-center" id="resultsCard">
+        <div style="font-size:56px; opacity:.7">🧮</div>
+        <div class="text-muted mt-2">Enter vial details to calculate reconstitution</div>
+      </div>
+    </div>
+  </div>
 </div>
+
+<script>
+function calculate() {
+  const vialMg = parseFloat(document.getElementById('vial_size_mg').value || '0');
+  const waterMl = parseFloat(document.getElementById('water_ml').value || '0');
+  const doseMcg = parseFloat(document.getElementById('desired_dose_mcg').value || '0');
+  const perDay = parseInt(document.getElementById('injections_per_day').value || '1', 10);
+
+  if (!vialMg || !waterMl || !doseMcg) {
+    return;
+  }
+
+  // Total mcg in vial
+  const totalMcg = vialMg * 1000.0;
+  // mcg per ml
+  const mcgPerMl = totalMcg / waterMl;
+  // ml per injection
+  const mlPerInjection = doseMcg / mcgPerMl;
+  // insulin units per injection (U-100) => 1 mL = 100 units
+  const unitsPerInjection = mlPerInjection * 100.0;
+
+  const injectionsPerVial = totalMcg / doseMcg;
+  const daysPerVial = injectionsPerVial / perDay;
+
+  const results = document.getElementById('resultsCard');
+  results.innerHTML = `
+    <div class="w-100">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <div class="fw-semibold">Results</div>
+      </div>
+
+      <div class="alert alert-info text-start">
+        <div><strong>Concentration:</strong> ${mcgPerMl.toFixed(1)} mcg / mL</div>
+        <div><strong>Per injection:</strong> ${mlPerInjection.toFixed(3)} mL (~${unitsPerInjection.toFixed(1)} units on U-100)</div>
+      </div>
+
+      <div class="card border-0 bg-light">
+        <div class="card-body text-start">
+          <div><strong>Total per vial:</strong> ${vialMg.toFixed(1)} mg (${totalMcg.toFixed(0)} mcg)</div>
+          <div><strong>Injections per vial:</strong> ${injectionsPerVial.toFixed(1)}</div>
+          <div><strong>Estimated days per vial:</strong> ${daysPerVial.toFixed(1)} days</div>
+        </div>
+      </div>
+
+      <div class="text-muted small mt-3">
+        Educational calculation only — confirm with a medical professional.
+      </div>
+    </div>
+  `;
+}
+</script>
 {% endblock %}
