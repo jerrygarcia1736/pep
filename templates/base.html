@@ -12,7 +12,7 @@
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark" style="background:#1673ff;">
   <div class="container-fluid">
-    <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="{{ url_for('dashboard') }}">
+    <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="{{ url_for('dashboard') if has_endpoint('dashboard') else '/' }}">
       <i class="bi bi-droplet-fill"></i> {{ app_name }}
     </a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain" aria-controls="navMain" aria-expanded="false" aria-label="Toggle navigation">
@@ -106,10 +106,14 @@
 
 <!-- Medical Disclaimer Warning Banner -->
 <div class="alert alert-warning alert-dismissible fade show m-0 rounded-0 text-center" role="alert" style="border-left: 0; border-right: 0;">
-    <strong><i class="bi bi-exclamation-triangle"></i> Educational Tool Only:</strong> 
-    Not medical advice. Peptides should be used under healthcare provider supervision. 
+  <strong><i class="bi bi-exclamation-triangle"></i> Educational Tool Only:</strong>
+  Not medical advice. Peptides should be used under healthcare provider supervision.
+  {% if has_endpoint('medical_disclaimer') %}
     <a href="{{ url_for('medical_disclaimer') }}" class="alert-link">Read Full Disclaimer</a>
-    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+  {% else %}
+    <a href="/medical-disclaimer" class="alert-link">Read Full Disclaimer</a>
+  {% endif %}
+  <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
 </div>
 
 <main class="container-fluid py-4">
@@ -132,8 +136,17 @@
   <div>{{ app_name }} © 2026 | For informational purposes only</div>
   <div>Not medical advice. Consult healthcare professionals.</div>
   <div class="mt-2">
-    <a href="{{ url_for('terms_of_service') }}" class="text-muted text-decoration-none me-3">Terms of Service</a>
-    <a href="{{ url_for('medical_disclaimer') }}" class="text-muted text-decoration-none">Medical Disclaimer</a>
+    {% if has_endpoint('terms_of_service') %}
+      <a href="{{ url_for('terms_of_service') }}" class="text-muted text-decoration-none me-3">Terms of Service</a>
+    {% else %}
+      <a href="/terms" class="text-muted text-decoration-none me-3">Terms of Service</a>
+    {% endif %}
+
+    {% if has_endpoint('medical_disclaimer') %}
+      <a href="{{ url_for('medical_disclaimer') }}" class="text-muted text-decoration-none">Medical Disclaimer</a>
+    {% else %}
+      <a href="/medical-disclaimer" class="text-muted text-decoration-none">Medical Disclaimer</a>
+    {% endif %}
   </div>
 </footer>
 
