@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Disclaimer Acknowledgement{% endblock %}
+{% block content %}
+<div class="container" style="max-width: 900px;">
+  <div class="card shadow-sm">
+    <div class="card-body p-4">
+      <h3 class="mb-2"><i class="bi bi-exclamation-triangle text-warning"></i> Educational tool only</h3>
+      <p class="text-muted">
+        This app provides educational information and organization tools. It is not medical advice and does not replace a licensed clinician.
+      </p>
+
+      <div class="border rounded p-3 bg-light small">
+        <ul class="mb-0">
+          <li>No diagnosis, treatment, or prescribing.</li>
+          <li>Discuss peptides/supplements with a qualified healthcare professional.</li>
+          <li>Emergency symptoms? Seek medical care immediately.</li>
+        </ul>
+      </div>
+
+      <form method="post" class="mt-3">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" value="on" id="accept_disclaimer" name="accept_disclaimer" required>
+          <label class="form-check-label" for="accept_disclaimer">
+            I understand and acknowledge this is educational only (not medical advice).
+          </label>
+        </div>
+
+        <div class="d-flex gap-2 mt-3">
+          <button class="btn btn-primary" type="submit">I Understand</button>
+          <a class="btn btn-outline-secondary" href="{{ request.args.get('next') or url_for('dashboard') }}">Back</a>
+          <a class="btn btn-link ms-auto" href="{{ url_for('medical_disclaimer') }}">Read full disclaimer</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
