@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}User Agreement - PeptideTracker.ai{% endblock %}
+
+{% block content %}
+<div class="container my-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-lg">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="mb-0"><i class="bi bi-file-earmark-text"></i> User Agreement</h3>
+                </div>
+                <div class="card-body p-5">
+                    <div class="alert alert-warning mb-4">
+                        <h5><i class="bi bi-exclamation-triangle"></i> Before You Continue</h5>
+                        <p class="mb-0">Please read and accept the following terms to use PeptideTracker.ai</p>
+                    </div>
+
+                    <form method="POST" action="{{ url_for('accept_agreement') }}" id="agreementForm">
+                        <h4 class="mb-3">Important Acknowledgments</h4>
+                        
+                        <div class="form-check mb-3 p-3 bg-light rounded">
+                            <input class="form-check-input" type="checkbox" id="agree1" name="agree1" required>
+                            <label class="form-check-label" for="agree1">
+                                <strong>I understand that PeptideTracker.ai is for informational and tracking purposes only,</strong> and does not provide medical advice, diagnosis, or treatment.
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-3 p-3 bg-light rounded">
+                            <input class="form-check-input" type="checkbox" id="agree2" name="agree2" required>
+                            <label class="form-check-label" for="agree2">
+                                <strong>I understand that Pep AI is an educational chatbot, NOT a licensed healthcare provider.</strong> Pep AI provides general educational information from research literature, not personalized medical recommendations.
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-3 p-3 bg-light rounded">
+                            <input class="form-check-input" type="checkbox" id="agree3" name="agree3" required>
+                            <label class="form-check-label" for="agree3">
+                                <strong>I will consult with a licensed healthcare provider</strong> before starting, stopping, or modifying any peptide protocol, supplement regimen, or wellness practice.
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-3 p-3 bg-light rounded">
+                            <input class="form-check-input" type="checkbox" id="agree4" name="agree4" required>
+                            <label class="form-check-label" for="agree4">
+                                <strong>I understand that peptides may be prescription medications</strong> and should only be used under qualified medical supervision with appropriate monitoring and testing.
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-3 p-3 bg-light rounded">
+                            <input class="form-check-input" type="checkbox" id="agree5" name="agree5" required>
+                            <label class="form-check-label" for="agree5">
+                                <strong>I acknowledge that use of this Service is entirely at my own risk.</strong> I will not hold PeptideTracker.ai liable for any health outcomes, injuries, damages, or consequences resulting from my use of the Service or any peptides.
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-3 p-3 bg-light rounded">
+                            <input class="form-check-input" type="checkbox" id="agree6" name="agree6" required>
+                            <label class="form-check-label" for="agree6">
+                                <strong>I am at least 18 years of age</strong> and have the legal capacity to enter into this agreement.
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-4 p-3 bg-light rounded">
+                            <input class="form-check-input" type="checkbox" id="agree7" name="agree7" required>
+                            <label class="form-check-label" for="agree7">
+                                <strong>I have read and agree to the <a href="{{ url_for('terms_of_service') }}" target="_blank">Terms of Service</a> and <a href="{{ url_for('medical_disclaimer') }}" target="_blank">Medical Disclaimer</a>.</strong>
+                            </label>
+                        </div>
+
+                        <hr class="my-4">
+
+                        <div class="alert alert-info">
+                            <h5><i class="bi bi-info-circle"></i> What This Means</h5>
+                            <p class="small mb-2"><strong>Educational Tool:</strong> PeptideTracker.ai helps you research, track, and organize wellness protocols.</p>
+                            <p class="small mb-2"><strong>Your Responsibility:</strong> All medical decisions must be made with qualified healthcare providers.</p>
+                            <p class="small mb-0"><strong>Safety First:</strong> Always prioritize professional medical guidance over information from this platform.</p>
+                        </div>
+
+                        <div class="d-grid gap-2 mt-4">
+                            <button type="submit" class="btn btn-primary btn-lg" id="acceptBtn" disabled>
+                                <i class="bi bi-check-circle"></i> I Accept - Continue to Dashboard
+                            </button>
+                            <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary">
+                                I Do Not Accept - Logout
+                            </a>
+                        </div>
+                    </form>
+
+                    <p class="text-center text-muted small mt-4">
+                        Questions? Contact <a href="mailto:support@peptidetracker.ai">support@peptidetracker.ai</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Enable submit button only when all checkboxes are checked
+document.getElementById('agreementForm').addEventListener('change', function() {
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+    document.getElementById('acceptBtn').disabled = !allChecked;
+});
+</script>
+{% endblock %}
