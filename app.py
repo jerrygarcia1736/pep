@@ -520,6 +520,7 @@ def add_vial():
         lot_number = (request.form.get("lot_number") or "").strip()
         reconstitute = (request.form.get("reconstitute") or "no").strip()
         ml_water = (request.form.get("ml_water") or "").strip()
+        reconstitution_date_str = (request.form.get("reconstitution_date") or "").strip()
 
         if not peptide_id or not mg_amount:
             flash("Please select a peptide and enter the vial amount (mg).", "warning")
@@ -539,7 +540,14 @@ def add_vial():
                     raise RuntimeError("Database helper does not implement add_vial().")
 
                 purchase_date = datetime.utcnow()
-                reconstitution_date = datetime.utcnow() if reconstitute == "yes" else None
+                if reconstitute == "yes":
+                    if reconstitution_date_str:
+                        # datetime-local comes in as "YYYY-MM-DDTHH:MM" (no timezone)
+                        reconstitution_date = datetime.fromisoformat(reconstitution_date_str)
+                    else:
+                        reconstitution_date = datetime.utcnow()
+                else:
+                    reconstitution_date = None
                 bacteriostatic_water_ml = float(ml_water) if ml_water else None
 
                 add_fn(
