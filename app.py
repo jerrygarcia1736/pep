@@ -699,7 +699,6 @@ def scan_food():
 
 @app.route("/scan-peptides", methods=["GET"])
 @login_required
-@require_onboarding
 def scan_peptides():
     peptides = _load_peptides_list()
     peptide_names = [p.get("name","") for p in peptides if p.get("name")]

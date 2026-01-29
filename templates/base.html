@@ -58,7 +58,7 @@
         {% if has_endpoint('nutrition') %}
           <li class="nav-item">
             <a class="nav-link {% if request.endpoint == 'nutrition' %}active{% endif %}" href="{{ url_for('nutrition') }}">
-              <i class="bi bi-upc-scan"></i> Intelligent Nutrition
+              <i class="bi bi-upc-scan"></i> Scan Nutrition
             </a>
           </li>
         {% endif %}
@@ -106,7 +106,7 @@
               {# Removed Scan Peptides from Tools since it's now in the top ribbon #}
               {% if has_endpoint('nutrition') %}
                 <li><hr class="dropdown-divider"></li>
-                <li><a class="dropdown-item" href="{{ url_for('nutrition') }}"><i class="bi bi-upc-scan"></i> Intelligent Nutrition</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('nutrition') }}"><i class="bi bi-upc-scan"></i> Scan Nutrition</a></li>
               {% endif %}
             </ul>
           </li>
