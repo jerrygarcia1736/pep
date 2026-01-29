@@ -34,6 +34,17 @@ from nutrition_api import register_nutrition_routes
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
+# Jinja filter for parsing JSON in templates
+@app.template_filter('from_json')
+def from_json_filter(value):
+    """Parse JSON string in templates"""
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except:
+        return []
+
 # -----------------------------------------------------------------------------
 # Models
 # -----------------------------------------------------------------------------
@@ -81,6 +92,23 @@ class PasswordResetToken(ModelBase):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
     used = Column(Integer, default=0)  # 0 = not used, 1 = used
+
+# User Profile model for personalized AI
+class UserProfile(ModelBase):
+    __tablename__ = "user_profiles"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, unique=True, nullable=False)
+    age = Column(Integer)
+    weight_lbs = Column(Float)
+    height_inches = Column(Float)
+    gender = Column(String(20))
+    goals = Column(String(500))
+    experience_level = Column(String(20))
+    medical_notes = Column(String(1000))
+    completed_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 # -----------------------------------------------------------------------------
 # DB init + migration
@@ -130,6 +158,17 @@ def login_required(f):
         if "user_id" not in session:
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
+        
+        # Check if user has completed profile (skip for profile_setup route itself)
+        if f.__name__ != 'profile_setup':
+            db = get_session(db_url)
+            try:
+                profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
+                if not profile or not profile.completed_at:
+                    return redirect(url_for("profile_setup"))
+            finally:
+                db.close()
+        
         return f(*args, **kwargs)
     return wrapper
 
@@ -389,12 +428,14 @@ def logout():
 @login_required
 def dashboard():
     stats, protocols, recent_injections = _compute_dashboard_context()
+    profile = get_user_profile(session["user_id"])
     return render_if_exists(
         "dashboard.html",
         fallback_endpoint="index",
         stats=stats,
         protocols=protocols,
         recent_injections=recent_injections,
+        profile=profile,
     )
 
 # -----------------------------------------------------------------------------
@@ -498,18 +539,75 @@ def reset_password(token):
         db.close()
 
 # -----------------------------------------------------------------------------
-# Legal Pages (Optional - Not Enforced)
+# User Profile Routes
 # -----------------------------------------------------------------------------
-@app.route("/terms-of-service")
-def terms_of_service():
-    """Terms of Service page"""
-    return render_if_exists("terms_of_service.html", fallback_endpoint="dashboard")
+@app.route("/profile-setup", methods=["GET", "POST"])
+@login_required
+def profile_setup():
+    """User profile setup/edit page"""
+    db = get_session(db_url)
+    try:
+        profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
+        
+        if request.method == "POST":
+            age = request.form.get("age")
+            weight_lbs = request.form.get("weight_lbs")
+            height_inches = request.form.get("height_inches")
+            gender = request.form.get("gender")
+            goals = request.form.getlist("goals")
+            experience_level = request.form.get("experience_level")
+            medical_notes = request.form.get("medical_notes", "").strip()
+            
+            if not all([age, weight_lbs, height_inches, gender, experience_level]):
+                flash("Please fill in all required fields.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
+            if not goals:
+                flash("Please select at least one goal.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
+            if profile:
+                profile.age = int(age)
+                profile.weight_lbs = float(weight_lbs)
+                profile.height_inches = int(height_inches)
+                profile.gender = gender
+                profile.goals = json.dumps(goals)
+                profile.experience_level = experience_level
+                profile.medical_notes = medical_notes
+                profile.completed_at = datetime.utcnow()
+                profile.updated_at = datetime.utcnow()
+                flash("Profile updated successfully!", "success")
+            else:
+                profile = UserProfile(
+                    user_id=session["user_id"],
+                    age=int(age),
+                    weight_lbs=float(weight_lbs),
+                    height_inches=int(height_inches),
+                    gender=gender,
+                    goals=json.dumps(goals),
+                    experience_level=experience_level,
+                    medical_notes=medical_notes,
+                    completed_at=datetime.utcnow()
+                )
+                db.add(profile)
+                flash("Profile created successfully!", "success")
+            
+            db.commit()
+            return redirect(url_for("dashboard"))
+        
+        return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+        
+    finally:
+        db.close()
 
 
-@app.route("/medical-disclaimer")
-def medical_disclaimer():
-    """Medical Disclaimer page"""
-    return render_if_exists("medical_disclaimer.html", fallback_endpoint="dashboard")
+def get_user_profile(user_id):
+    """Helper function to get user profile"""
+    db = get_session(db_url)
+    try:
+        return db.query(UserProfile).filter_by(user_id=user_id).first()
+    finally:
+        db.close()
 
 # -----------------------------------------------------------------------------
 # Stub endpoints to prevent BuildError
@@ -1029,83 +1127,6 @@ def coaching():
 @login_required
 def chat():
     return render_if_exists("chat.html", fallback_endpoint="dashboard")
-
-# -----------------------------------------------------------------------------
-# Pep AI Chat API with Safe System Prompt (if chat.html uses it)
-# -----------------------------------------------------------------------------
-@app.route("/api/chat", methods=["POST"])
-@login_required
-def api_chat():
-    """Chat with Pep AI using legally safe system prompt"""
-    try:
-        data = request.get_json()
-        user_message = data.get("message", "").strip()
-        
-        if not user_message:
-            return jsonify({"error": "Message required"}), 400
-        
-        # SAFE SYSTEM PROMPT - Legally Protected
-        system_prompt = """You are Pep AI, an educational research assistant for PeptideTracker.ai.
-
-CRITICAL LEGAL BOUNDARIES - NEVER VIOLATE:
-1. You are NOT a doctor, nurse, or licensed healthcare provider
-2. You do NOT provide medical advice, diagnosis, or treatment
-3. You do NOT recommend specific doses for individual users
-4. You ALWAYS direct users to consult healthcare providers for medical decisions
-
-WHAT YOU CAN DO (Educational):
-✓ Explain how peptides work (mechanisms of action)
-✓ Summarize published research studies
-✓ Provide general dosing ranges from research literature
-✓ Compare peptides based on research data
-✓ Help users understand scientific concepts
-✓ Calculate math (reconstitution, concentrations)
-
-WHAT YOU CANNOT DO:
-✗ Say "You should take X dose" or "I recommend X mcg for you"
-✗ Say "This will cure/treat/fix your condition"
-✗ Interpret symptoms medically
-✗ Tell them to start/stop protocols
-✗ Make medical decisions
-
-RESPONSE FRAMEWORK:
-When asked about dosages: Give research ranges + say "Your healthcare provider can determine appropriate dose"
-When asked about starting: Share research + say "Discuss with your provider first"
-
-MANDATORY DISCLAIMER (include at end of every response about peptides):
----
-⚠️ This is educational information from research literature, not medical advice. Always consult your healthcare provider before starting, stopping, or modifying any peptide protocol.
-
-TONE: Friendly, educational, safety-conscious"""
-        
-        # Call Claude API
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type": "application/json",
-                "anthropic-version": "2023-06-01"
-            },
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 1500,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_message}]
-            },
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            ai_response = response.json()
-            return jsonify({
-                "success": True,
-                "response": ai_response["content"][0]["text"]
-            })
-        else:
-            return jsonify({"success": False, "error": "AI service temporarily unavailable"}), 500
-        
-    except Exception as e:
-        print(f"Chat error: {e}")
-        return jsonify({"success": False, "error": "Chat service temporarily unavailable"}), 500
 
 # -----------------------------------------------------------------------------
 # Run

@@ -59,6 +59,220 @@
     </div>
 </div>
 
+
+<!-- Profile Setup (Integrated) -->
+<div class="card shadow-sm border-0 mb-4" id="profileSetupCard">
+  <div class="card-header text-white d-flex align-items-center justify-content-between py-3"
+       style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+    <div>
+      <h5 class="mb-0"><i class="bi bi-person-circle me-2"></i>Complete Your Profile</h5>
+      <div class="small opacity-75">Help Pep AI give you personalized recommendations</div>
+    </div>
+    <button class="btn btn-light btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#profileSetupCollapse"
+            aria-expanded="true" aria-controls="profileSetupCollapse">
+      <i class="bi bi-chevron-down me-1"></i> Toggle
+    </button>
+  </div>
+
+  <div class="collapse show" id="profileSetupCollapse">
+    <div class="card-body p-4">
+      <form method="POST" id="profileForm">
+                        
+                        <!-- Basic Info Section -->
+                        <h4 class="mb-3 text-primary"><i class="bi bi-info-circle"></i> Basic Information</h4>
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-3">
+                                <label class="form-label fw-semibold">Age *</label>
+                                <input type="number" name="age" class="form-control form-control-lg" 
+                                       min="18" max="100" value="{{ profile.age if profile else '' }}" required>
+                            </div>
+                            
+                            <div class="col-md-3">
+                                <label class="form-label fw-semibold">Weight (lbs) *</label>
+                                <input type="number" name="weight_lbs" class="form-control form-control-lg" 
+                                       min="50" max="500" step="0.1" value="{{ profile.weight_lbs if profile else '' }}" required>
+                            </div>
+                            
+                            <div class="col-md-3">
+                                <label class="form-label fw-semibold">Height (inches) *</label>
+                                <input type="number" name="height_inches" class="form-control form-control-lg" 
+                                       min="48" max="96" value="{{ profile.height_inches if profile else '' }}" required>
+                                <small class="form-text text-muted">5'10" = 70"</small>
+                            </div>
+                            
+                            <div class="col-md-3">
+                                <label class="form-label fw-semibold">Gender *</label>
+                                <select name="gender" class="form-select form-select-lg" required>
+                                    <option value="">Select...</option>
+                                    <option value="male" {% if profile and profile.gender == 'male' %}selected{% endif %}>Male</option>
+                                    <option value="female" {% if profile and profile.gender == 'female' %}selected{% endif %}>Female</option>
+                                    <option value="other" {% if profile and profile.gender == 'other' %}selected{% endif %}>Other</option>
+                                    <option value="prefer_not_to_say" {% if profile and profile.gender == 'prefer_not_to_say' %}selected{% endif %}>Prefer not to say</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Goals Section -->
+                        <h4 class="mb-3 text-primary"><i class="bi bi-bullseye"></i> Your Goals</h4>
+                        <p class="text-muted mb-3">Select all that apply - this helps Pep AI recommend relevant peptides</p>
+                        
+                        <div class="row g-3 mb-4">
+                            {% set existing_goals = profile.goals|from_json if profile and profile.goals else [] %}
+                            
+                            <div class="col-md-6 col-lg-4">
+                                <div class="form-check p-3 border rounded hover-shadow">
+                                    <input class="form-check-input" type="checkbox" name="goals" value="fat_loss" 
+                                           id="goal1" {% if 'fat_loss' in existing_goals %}checked{% endif %}>
+                                    <label class="form-check-label w-100" for="goal1">
+                                        <i class="bi bi-fire text-danger"></i> <strong>Fat Loss</strong><br>
+                                        <small class="text-muted">Weight management & body composition</small>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6 col-lg-4">
+                                <div class="form-check p-3 border rounded hover-shadow">
+                                    <input class="form-check-input" type="checkbox" name="goals" value="muscle_gain" 
+                                           id="goal2" {% if 'muscle_gain' in existing_goals %}checked{% endif %}>
+                                    <label class="form-check-label w-100" for="goal2">
+                                        <i class="bi bi-lightning text-warning"></i> <strong>Muscle Gain</strong><br>
+                                        <small class="text-muted">Hypertrophy & strength</small>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6 col-lg-4">
+                                <div class="form-check p-3 border rounded hover-shadow">
+                                    <input class="form-check-input" type="checkbox" name="goals" value="recovery" 
+                                           id="goal3" {% if 'recovery' in existing_goals %}checked{% endif %}>
+                                    <label class="form-check-label w-100" for="goal3">
+                                        <i class="bi bi-heart-pulse text-success"></i> <strong>Injury Recovery</strong><br>
+                                        <small class="text-muted">Healing & tissue repair</small>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6 col-lg-4">
+                                <div class="form-check p-3 border rounded hover-shadow">
+                                    <input class="form-check-input" type="checkbox" name="goals" value="longevity" 
+                                           id="goal4" {% if 'longevity' in existing_goals %}checked{% endif %}>
+                                    <label class="form-check-label w-100" for="goal4">
+                                        <i class="bi bi-hourglass-split text-secondary"></i> <strong>Longevity</strong><br>
+                                        <small class="text-muted">Anti-aging & healthspan</small>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6 col-lg-4">
+                                <div class="form-check p-3 border rounded hover-shadow">
+                                    <input class="form-check-input" type="checkbox" name="goals" value="skin" 
+                                           id="goal5" {% if 'skin' in existing_goals %}checked{% endif %}>
+                                    <label class="form-check-label w-100" for="goal5">
+                                        <i class="bi bi-droplet text-info"></i> <strong>Skin Health</strong><br>
+                                        <small class="text-muted">Appearance & collagen</small>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6 col-lg-4">
+                                <div class="form-check p-3 border rounded hover-shadow">
+                                    <input class="form-check-input" type="checkbox" name="goals" value="cognition" 
+                                           id="goal6" {% if 'cognition' in existing_goals %}checked{% endif %}>
+                                    <label class="form-check-label w-100" for="goal6">
+                                        <i class="bi bi-lightbulb text-primary"></i> <strong>Cognitive Enhancement</strong><br>
+                                        <small class="text-muted">Focus & mental clarity</small>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Experience Section -->
+                        <h4 class="mb-3 text-primary"><i class="bi bi-star"></i> Experience Level</h4>
+                        <p class="text-muted mb-3">This helps us provide appropriate guidance</p>
+                        
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-4">
+                                <input type="radio" class="btn-check" name="experience_level" value="beginner" 
+                                       id="exp1" {% if profile and profile.experience_level == 'beginner' %}checked{% endif %} required>
+                                <label class="btn btn-outline-primary w-100 p-3" for="exp1">
+                                    <i class="bi bi-book"></i><br>
+                                    <strong>Beginner</strong><br>
+                                    <small>New to peptides</small>
+                                </label>
+                            </div>
+                            <div class="col-md-4">
+                                <input type="radio" class="btn-check" name="experience_level" value="intermediate" 
+                                       id="exp2" {% if profile and profile.experience_level == 'intermediate' %}checked{% endif %}>
+                                <label class="btn btn-outline-primary w-100 p-3" for="exp2">
+                                    <i class="bi bi-graph-up"></i><br>
+                                    <strong>Intermediate</strong><br>
+                                    <small>Some experience</small>
+                                </label>
+                            </div>
+                            <div class="col-md-4">
+                                <input type="radio" class="btn-check" name="experience_level" value="advanced" 
+                                       id="exp3" {% if profile and profile.experience_level == 'advanced' %}checked{% endif %}>
+                                <label class="btn btn-outline-primary w-100 p-3" for="exp3">
+                                    <i class="bi bi-trophy"></i><br>
+                                    <strong>Advanced</strong><br>
+                                    <small>Experienced user</small>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Optional Medical Notes -->
+                        <h4 class="mb-3 text-primary"><i class="bi bi-clipboard2-pulse"></i> Medical Notes <span class="badge bg-secondary">Optional</span></h4>
+                        <p class="text-muted mb-3">Any relevant health conditions or considerations? (This helps Pep AI give safer guidance)</p>
+                        
+                        <div class="mb-4">
+                            <textarea name="medical_notes" class="form-control" rows="3" 
+                                      placeholder="Example: Previous shoulder injury, hypothyroidism, etc.">{{ profile.medical_notes if profile else '' }}</textarea>
+                            <small class="form-text text-muted">
+                                <i class="bi bi-lock"></i> Private - only you and Pep AI see this
+                            </small>
+                        </div>
+
+                        <hr class="my-4">
+
+                        <!-- Privacy Notice -->
+                        <div class="alert alert-info mb-4">
+                            <i class="bi bi-shield-check"></i> <strong>Privacy:</strong> 
+                            Your profile data is used only to personalize Pep AI responses and is never shared with third parties.
+                        </div>
+
+                        <!-- Submit Button -->
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary btn-lg py-3">
+                                <i class="bi bi-check-circle"></i> Complete Profile & Continue
+                            </button>
+                            {% if profile and profile.completed_at %}
+                            <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">
+                                Cancel
+                            </a>
+                            {% endif %}
+                        </div>
+                    </form>
+    </div>
+  </div>
+</div>
+
+<style>
+.hover-shadow {
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+.hover-shadow:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    transform: translateY(-2px);
+}
+.form-check-input:checked + .form-check-label {
+    background-color: #f8f9fa;
+}
+</style>
+
+
+
+
 <style>
   @media (min-width: 992px){
     .navbar .nav-link { font-size: 0.92rem; padding-top: .45rem; padding-bottom: .45rem; }
@@ -333,4 +547,22 @@
     slider.addEventListener("input", () => badge.textContent = slider.value);
   }
 </script>
+
+<script>
+  // Profile form validation (integrated)
+  (function(){
+    const form = document.getElementById('profileForm');
+    if (!form) return;
+
+    form.addEventListener('submit', function(e) {
+      const checkboxes = document.querySelectorAll('input[name="goals"]:checked');
+      if (checkboxes.length === 0) {
+        e.preventDefault();
+        alert('Please select at least one goal');
+        return false;
+      }
+    });
+  })();
+</script>
+
 {% endblock %}
