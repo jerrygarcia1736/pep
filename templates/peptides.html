@@ -9,10 +9,30 @@
     <div class="text-muted">Select 2–4 peptides to compare side-by-side. (Educational UI only — not medical advice.)</div>
   </div>
 
-  <button class="btn btn-primary d-inline-flex align-items-center gap-2" id="compareBtn" disabled>
-    <i class="bi bi-bar-chart"></i>
-    <span>Compare (<span id="compareCount">0</span>)</span>
-  </button>
+  <div class="d-flex align-items-center gap-2">
+    <div class="dropdown">
+      <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" type="button">
+        <i class="bi bi-bookmark"></i> Saved
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end" style="min-width: 320px;">
+        <li class="px-3 pt-2 pb-1 text-muted small">Saved comparisons (stored on this device)</li>
+        <li><hr class="dropdown-divider"></li>
+        <li id="savedEmpty" class="px-3 py-2 text-muted small">None yet.</li>
+        <li id="savedList"></li>
+        <li><hr class="dropdown-divider"></li>
+        <li class="px-3 pb-2">
+          <button class="btn btn-sm btn-outline-danger w-100" id="clearSavedBtn" type="button">
+            <i class="bi bi-trash"></i> Clear saved
+          </button>
+        </li>
+      </ul>
+    </div>
+
+    <button class="btn btn-primary d-inline-flex align-items-center gap-2" id="compareBtn" disabled>
+      <i class="bi bi-bar-chart"></i>
+      <span>Compare (<span id="compareCount">0</span>)</span>
+    </button>
+  </div>
 </div>
 
 <div class="row g-3 mb-3">
@@ -47,33 +67,69 @@
   {% endfor %}
 </div>
 {% else %}
-<div class="alert alert-warning">
-  No peptides found.
-</div>
+<div class="alert alert-warning">No peptides found.</div>
 {% endif %}
 
+<!-- Compare modal -->
 <div class="modal fade" id="compareModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-xl modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-bar-chart"></i> Compare Peptides</h5>
+        <div>
+          <h5 class="modal-title mb-1"><i class="bi bi-bar-chart"></i> Compare Peptides</h5>
+          <div class="text-muted small">Quick visual is an educational heuristic based on keyword signals — not medical guidance.</div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
+
       <div class="modal-body">
-        <div id="compareLoading" class="text-muted">Loading comparison…</div>
-        <div class="table-responsive d-none" id="compareTableWrap">
-          <table class="table table-bordered align-middle">
-            <thead class="table-light">
-              <tr id="compareHead"></tr>
-            </thead>
-            <tbody>
-              <tr id="compareCategory"></tr>
-              <tr id="compareSummary"></tr>
-              <tr id="compareBenefits"></tr>
-            </tbody>
-          </table>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <button class="btn btn-outline-primary" id="saveCompareBtn" type="button">
+            <i class="bi bi-bookmark-plus"></i> Save comparison
+          </button>
+
+          <button class="btn btn-outline-success" id="askPepAiBtn" type="button">
+            <i class="bi bi-chat-dots"></i> Ask Pep AI about this
+          </button>
+
+          <span class="text-muted small d-flex align-items-center" id="compareHint"></span>
         </div>
+
+        <div id="compareLoading" class="text-muted">Loading comparison…</div>
+
+        <div class="row g-3 d-none" id="compareContent">
+          <div class="col-12">
+            <div class="card border-0 shadow-sm">
+              <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                  <div class="fw-semibold"><i class="bi bi-radar"></i> Visual heuristic</div>
+                  <span class="badge text-bg-light border">Fat loss • Muscle • Recovery • Longevity • Cognition • Skin</span>
+                </div>
+                <div class="mt-3" style="min-height: 320px;">
+                  <canvas id="compareRadar"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12">
+            <div class="table-responsive" id="compareTableWrap">
+              <table class="table table-bordered align-middle">
+                <thead class="table-light">
+                  <tr id="compareHead"></tr>
+                </thead>
+                <tbody>
+                  <tr id="compareCategory"></tr>
+                  <tr id="compareSummary"></tr>
+                  <tr id="compareBenefits"></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
       </div>
+
       <div class="modal-footer">
         <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
@@ -83,6 +139,9 @@
 {% endblock %}
 
 {% block scripts %}
+<!-- Chart.js (lightweight CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
 <script>
 (function(){
   const filterInput = document.getElementById('filterInput');
@@ -90,6 +149,13 @@
   const checks = Array.from(document.querySelectorAll('.compare-check'));
   const compareBtn = document.getElementById('compareBtn');
   const compareCount = document.getElementById('compareCount');
+
+  const savedEmpty = document.getElementById('savedEmpty');
+  const savedList = document.getElementById('savedList');
+  const clearSavedBtn = document.getElementById('clearSavedBtn');
+
+  let lastCompareData = [];
+  let radarChart = null;
 
   function selectedIds(){
     return checks.filter(c => c.checked).map(c => c.value);
@@ -99,6 +165,7 @@
     const sel = selectedIds();
     compareCount.textContent = String(sel.length);
     compareBtn.disabled = !(sel.length >= 2 && sel.length <= 4);
+
     if(sel.length >= 4){
       checks.filter(c => !c.checked).forEach(c => c.disabled = true);
     } else {
@@ -119,40 +186,310 @@
   checks.forEach(c => c.addEventListener('change', updateCompareState));
   updateCompareState();
 
-  async function openCompare(){
-    const ids = selectedIds();
-    const modalEl = document.getElementById('compareModal');
-    const loading = document.getElementById('compareLoading');
-    const wrap = document.getElementById('compareTableWrap');
+  // ------- Saved comparisons (localStorage) -------
+  const STORAGE_KEY = "pt_saved_compares_v1";
+
+  function getSaved(){
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+    catch(e){ return []; }
+  }
+  function setSaved(arr){
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+  }
+  function renderSaved(){
+    const saved = getSaved();
+    savedList.innerHTML = "";
+    savedEmpty.style.display = saved.length ? "none" : "block";
+
+    if(!saved.length) return;
+
+    const ul = document.createElement("ul");
+    ul.className = "list-unstyled m-0 px-2";
+
+    saved.forEach((item, idx) => {
+      const li = document.createElement("li");
+      li.className = "mb-2";
+
+      const names = (item.names || []).join(" • ");
+      const when = item.created_at ? new Date(item.created_at).toLocaleString() : "";
+
+      li.innerHTML = `
+        <div class="border rounded p-2">
+          <div class="fw-semibold small">${names}</div>
+          <div class="text-muted small">${when}</div>
+          <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-sm btn-outline-primary w-100" data-action="load" data-idx="${idx}">
+              <i class="bi bi-play"></i> Load
+            </button>
+            <button class="btn btn-sm btn-outline-danger" data-action="del" data-idx="${idx}">
+              <i class="bi bi-x"></i>
+            </button>
+          </div>
+        </div>
+      `;
+      ul.appendChild(li);
+    });
+
+    savedList.appendChild(ul);
+
+    savedList.querySelectorAll("button[data-action]").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        const action = btn.getAttribute("data-action");
+        const idx = parseInt(btn.getAttribute("data-idx"), 10);
+        const savedArr = getSaved();
+        const item = savedArr[idx];
+        if(!item) return;
+
+        if(action === "del"){
+          savedArr.splice(idx,1);
+          setSaved(savedArr);
+          renderSaved();
+          return;
+        }
+
+        if(action === "load"){
+          // set checkboxes
+          const ids = (item.ids || []).map(String);
+          checks.forEach(c => c.checked = ids.includes(String(c.value)));
+          updateCompareState();
+          openCompare(); // open modal immediately
+        }
+      });
+    });
+  }
+
+  if(clearSavedBtn){
+    clearSavedBtn.addEventListener("click", () => {
+      setSaved([]);
+      renderSaved();
+    });
+  }
+
+  renderSaved();
+
+  // ------- Compare rendering -------
+  function textScore(text){
+    const t = (text || "").toLowerCase();
+
+    const score = (words) => words.reduce((acc, w) => acc + (t.includes(w) ? 1 : 0), 0);
+
+    // Simple keyword buckets (heuristic)
+    const fat = score(["fat", "weight", "glp", "appetite", "insulin", "glucose", "lipid", "metabolic"]);
+    const muscle = score(["muscle", "strength", "hypertrophy", "growth", "igf", "anabolic", "recovery from training"]);
+    const recovery = score(["recovery", "repair", "healing", "tendon", "ligament", "inflammation", "injury", "wound"]);
+    const longevity = score(["longevity", "aging", "healthspan", "mitochond", "oxidative", "autophagy"]);
+    const cognition = score(["cognition", "memory", "focus", "brain", "neuro", "anxiety", "sleep", "mood"]);
+    const skin = score(["skin", "hair", "collagen", "wrinkle", "pigment", "wound healing", "elastic"]);
+
+    // Normalize to 0–10
+    const clamp = (n) => Math.min(10, Math.max(0, n * 2));
+    return [clamp(fat), clamp(muscle), clamp(recovery), clamp(longevity), clamp(cognition), clamp(skin)];
+  }
+
+  function buildRadar(data){
+    const ctx = document.getElementById("compareRadar");
+    if(!ctx) return;
+
+    if(radarChart){
+      try { radarChart.destroy(); } catch(e){}
+      radarChart = null;
+    }
+
+    const labels = ["Fat loss", "Muscle", "Recovery", "Longevity", "Cognition", "Skin"];
+    const datasets = data.map((p, i) => {
+      const score = textScore((p.summary || "") + " " + (p.benefits || ""));
+      return {
+        label: p.name || ("Peptide " + (p.id || "")),
+        data: score,
+        fill: true,
+        borderWidth: 2,
+        pointRadius: 2
+      };
+    });
+
+    radarChart = new Chart(ctx, {
+      type: "radar",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          r: {
+            min: 0,
+            max: 10,
+            ticks: { stepSize: 2 }
+          }
+        },
+        plugins: {
+          legend: { position: "bottom" }
+        }
+      }
+    });
+  }
+
+  function buildTable(data){
     const head = document.getElementById('compareHead');
     const cat = document.getElementById('compareCategory');
     const sum = document.getElementById('compareSummary');
     const ben = document.getElementById('compareBenefits');
 
-    loading.classList.remove('d-none');
-    wrap.classList.add('d-none');
-    head.innerHTML = '<th></th>';
+    head.innerHTML = '<th style="width:160px"></th>';
     cat.innerHTML = '<th>Category</th>';
     sum.innerHTML = '<th>Summary</th>';
     ben.innerHTML = '<th>Benefits</th>';
 
-    const res = await fetch('/api/peptides?ids=' + ids.join(','));
-    const data = await res.json();
+    const esc = (s) => {
+      return String(s || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    };
 
     data.forEach(p => {
-      head.insertAdjacentHTML('beforeend', `<th>${p.name || ''}</th>`);
-      cat.insertAdjacentHTML('beforeend', `<td>${p.category || ''}</td>`);
-      sum.insertAdjacentHTML('beforeend', `<td>${p.summary || ''}</td>`);
-      ben.insertAdjacentHTML('beforeend', `<td>${p.benefits || ''}</td>`);
+      head.insertAdjacentHTML('beforeend', `<th>${esc(p.name || '')}</th>`);
+      cat.insertAdjacentHTML('beforeend', `<td>${esc(p.category || '')}</td>`);
+      sum.insertAdjacentHTML('beforeend', `<td>${esc(p.summary || '')}</td>`);
+      ben.insertAdjacentHTML('beforeend', `<td>${esc(p.benefits || '')}</td>`);
     });
+  }
+
+  async function fetchCompareData(ids){
+    // Primary (new): /api/peptides?ids=...
+    const url = '/api/peptides?ids=' + ids.join(',');
+    const res = await fetch(url);
+    if(res.ok){
+      const data = await res.json();
+      if(Array.isArray(data) && data.length) return data;
+    }
+    // Back-compat fallback: POST /api/peptides/compare
+    const res2 = await fetch('/api/peptides/compare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    if(res2.ok){
+      const data2 = await res2.json();
+      if(Array.isArray(data2)) return data2;
+    }
+    return [];
+  }
+
+  async function openCompare(){
+    const ids = selectedIds();
+    const modalEl = document.getElementById('compareModal');
+    const loading = document.getElementById('compareLoading');
+    const content = document.getElementById('compareContent');
+    const hint = document.getElementById('compareHint');
+
+    loading.classList.remove('d-none');
+    content.classList.add('d-none');
+    hint.textContent = '';
+
+    const data = await fetchCompareData(ids);
+    lastCompareData = data;
+
+    if(!data.length){
+      loading.textContent = "Couldn’t load peptide data for compare. (Check API /api/peptides.)";
+      const modal = new bootstrap.Modal(modalEl);
+      modal.show();
+      return;
+    }
+
+    buildRadar(data);
+    buildTable(data);
 
     loading.classList.add('d-none');
-    wrap.classList.remove('d-none');
+    content.classList.remove('d-none');
+
+    hint.textContent = "Tip: Save this comparison or ask Pep AI with one click.";
 
     const modal = new bootstrap.Modal(modalEl);
     modal.show();
   }
 
+  // ------- Save + Pep AI buttons -------
+  async function saveCompare(){
+    if(!lastCompareData.length) return;
+
+    const ids = lastCompareData.map(p => p.id).filter(Boolean);
+    const names = lastCompareData.map(p => p.name).filter(Boolean);
+
+    const saved = getSaved();
+    saved.unshift({
+      ids,
+      names,
+      created_at: new Date().toISOString()
+    });
+
+    // De-dupe by ids signature
+    const seen = new Set();
+    const cleaned = [];
+    for(const item of saved){
+      const sig = (item.ids || []).join(",");
+      if(seen.has(sig)) continue;
+      seen.add(sig);
+      cleaned.push(item);
+    }
+
+    setSaved(cleaned.slice(0, 20)); // keep last 20
+    renderSaved();
+
+    const btn = document.getElementById('saveCompareBtn');
+    if(btn){
+      const old = btn.innerHTML;
+      btn.innerHTML = '<i class="bi bi-check2"></i> Saved';
+      btn.disabled = true;
+      setTimeout(() => { btn.innerHTML = old; btn.disabled = false; }, 1200);
+    }
+  }
+
+  function buildPepAiPrompt(){
+    const lines = [];
+    lines.push("Using ONLY the user’s peptide library data shown here (not general medical advice):");
+    lines.push("");
+    lines.push("Compare these peptides and summarize differences, common uses, and what to watch for:");
+    lines.push("");
+    lastCompareData.forEach(p => {
+      lines.push(`- ${p.name} (Category: ${p.category || "N/A"})`);
+      if(p.summary) lines.push(`  Summary: ${p.summary}`);
+      if(p.benefits) lines.push(`  Benefits/Notes: ${p.benefits}`);
+      lines.push("");
+    });
+    lines.push("Then answer:");
+    lines.push("1) What are the key differences?");
+    lines.push("2) Which goals (fat loss, muscle, recovery, longevity, cognition, skin) do they best align with, and why?");
+    lines.push("3) What questions should I ask my clinician before using any of these?");
+    return lines.join("\n");
+  }
+
+  async function askPepAi(){
+    if(!lastCompareData.length) return;
+    const prompt = buildPepAiPrompt();
+
+    // Copy to clipboard as a guaranteed fallback
+    try {
+      await navigator.clipboard.writeText(prompt);
+    } catch(e){}
+
+    // Open chat with prefill param (safe even if chat ignores it)
+    const url = "/chat?prefill=" + encodeURIComponent(prompt);
+    window.open(url, "_blank");
+
+    const btn = document.getElementById('askPepAiBtn');
+    if(btn){
+      const old = btn.innerHTML;
+      btn.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied + opened Pep AI';
+      btn.disabled = true;
+      setTimeout(() => { btn.innerHTML = old; btn.disabled = false; }, 1500);
+    }
+  }
+
+  const saveBtn = document.getElementById('saveCompareBtn');
+  const pepBtn = document.getElementById('askPepAiBtn');
+  if(saveBtn) saveBtn.addEventListener('click', saveCompare);
+  if(pepBtn) pepBtn.addEventListener('click', askPepAi);
+
+  // Compare button
   if(compareBtn){
     compareBtn.addEventListener('click', openCompare);
   }
