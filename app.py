@@ -604,17 +604,20 @@ def add_protocol():
                 pdb = PeptideDB(db)
                 create_fn = getattr(pdb, "create_protocol", None) or getattr(pdb, "add_protocol", None)
                 if callable(create_fn):
-                    create_fn(
-                        user_id=session["user_id"],
-                        name=protocol_name,
+                    create_fn(                        name=protocol_name,
                         peptide_id=int(peptide_id) if peptide_id else None,
                         dose_mcg=float(dose_mcg) if dose_mcg else None,
-                        frequency_per_day=float(frequency_per_day) if frequency_per_day else None,
+                        frequency_per_day=int(frequency_per_day) if frequency_per_day else None,
                         notes=notes or None,
                     )
                     db.commit()
                     flash("Protocol created.", "success")
                     return redirect(url_for("protocols"))
+            finally:
+                try:
+                    db.close()
+                except Exception:
+                    pass
         except Exception:
             app.logger.exception("add_protocol persistence not available; using stub fallback.")
 
@@ -731,9 +734,7 @@ def log_food():
                     # Save to database
                     db = get_session(db_url)
                     try:
-                        food_log = FoodLog(
-                            user_id=session["user_id"],
-                            description=food_description,
+                        food_log = FoodLog(                            description=food_description,
                             total_calories=total_calories,
                             total_protein_g=total_protein,
                             total_fat_g=total_fat,
@@ -803,9 +804,7 @@ def api_log_food():
         
         db = get_session(db_url)
         try:
-            food_log = FoodLog(
-                user_id=session["user_id"],
-                description=description,
+            food_log = FoodLog(                description=description,
                 total_calories=total_calories,
                 total_protein_g=total_protein_g,
                 total_fat_g=total_fat_g,
