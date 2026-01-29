@@ -207,6 +207,41 @@ def _compute_dashboard_context() -> Tuple[Dict[str, Any], List[Any], List[Any]]:
 
     return stats, protocols, recent_injections
 
+
+# -----------------------------------------------------------------------------
+# Shared loader: peptides list for forms (best-effort)
+# -----------------------------------------------------------------------------
+def _load_peptides_list() -> list[Any]:
+    """Return peptides from your project's DB helper if available, else an empty list."""
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            return getattr(pdb, "list_peptides", lambda: [])()
+        finally:
+            db.close()
+    except Exception as e:
+        app.logger.info("Could not load peptides list (non-fatal): %s", e)
+        return []
+
+# -----------------------------------------------------------------------------
+# Protocol templates (names + metadata only; user sets dosing)
+# -----------------------------------------------------------------------------
+PROTOCOL_TEMPLATES: dict[str, dict[str, str]] = {
+    "bpc157": {"name": "BPC-157", "protocol_name": "BPC-157 Healing Protocol"},
+    "tb500": {"name": "TB-500", "protocol_name": "TB-500 Recovery Protocol"},
+    "epitalon": {"name": "Epitalon", "protocol_name": "Epitalon Sleep & Longevity Protocol"},
+    "ghkcu": {"name": "GHK-Cu", "protocol_name": "GHK-Cu Skin & Repair Protocol"},
+    "mt2": {"name": "MT2", "protocol_name": "MT2 Tanning Protocol"},
+    "kpv": {"name": "KPV", "protocol_name": "KPV Protocol"},
+    "dsip": {"name": "DSIP", "protocol_name": "DSIP Protocol"},
+    "cjc1295": {"name": "CJC-1295", "protocol_name": "CJC-1295 Protocol"},
+    "ipamorelin": {"name": "Ipamorelin", "protocol_name": "Ipamorelin Protocol"},
+    "selank": {"name": "Selank", "protocol_name": "Selank Protocol"},
+}
+
+
 # -----------------------------------------------------------------------------
 # Core routes
 # -----------------------------------------------------------------------------
@@ -405,18 +440,114 @@ def log_injection():
 @app.route("/add-vial", methods=["GET", "POST"])
 @login_required
 def add_vial():
+    peptides = _load_peptides_list()
+
     if request.method == "POST":
-        flash("add_vial is not wired yet (stub).", "info")
+        # Best-effort stub: your project may implement persistence in database.PeptideDB.
+        peptide_id = (request.form.get("peptide_id") or "").strip()
+        mg_amount = (request.form.get("mg_amount") or "").strip()
+        vendor = (request.form.get("vendor") or "").strip()
+        lot_number = (request.form.get("lot_number") or "").strip()
+        reconstitute = (request.form.get("reconstitute") or "no").strip()
+        ml_water = (request.form.get("ml_water") or "").strip()
+
+        try:
+            from database import PeptideDB  # type: ignore
+
+            db = get_session(db_url)
+            try:
+                pdb = PeptideDB(db)
+                create_fn = getattr(pdb, "create_vial", None) or getattr(pdb, "add_vial", None)
+                if callable(create_fn):
+                    create_fn(
+                        user_id=session["user_id"],
+                        peptide_id=int(peptide_id) if peptide_id else None,
+                        mg_amount=float(mg_amount) if mg_amount else None,
+                        vendor=vendor or None,
+                        lot_number=lot_number or None,
+                        reconstitute=(reconstitute == "yes"),
+                        ml_water=float(ml_water) if ml_water else None,
+                    )
+                    db.commit()
+                    flash("Vial added.", "success")
+                    return redirect(url_for("vials"))
+        except Exception:
+            app.logger.exception("add_vial persistence not available; using stub fallback.")
+
+        flash("Vial form submitted, but persistence is not wired yet.", "info")
         return redirect(url_for("dashboard"))
-    return render_if_exists("add_vial.html", fallback_endpoint="dashboard")
+
+    return render_if_exists("add_vial.html", fallback_endpoint="dashboard", peptides=peptides)
+
 
 @app.route("/add-protocol", methods=["GET", "POST"])
 @login_required
 def add_protocol():
+    peptides = _load_peptides_list()
+
+    # One-click templates: /add-protocol?template=epitalon
+    template_key = (request.args.get("template") or "").strip().lower()
+    template_data = PROTOCOL_TEMPLATES.get(template_key)
+
     if request.method == "POST":
-        flash("add_protocol is not wired yet (stub).", "info")
+        protocol_name = (request.form.get("protocol_name") or "").strip()
+        peptide_id = (request.form.get("peptide_id") or "").strip()
+        dose_mcg = (request.form.get("dose_mcg") or "").strip()
+        frequency_per_day = (request.form.get("frequency_per_day") or "").strip()
+        notes = (request.form.get("notes") or "").strip()
+
+        if not protocol_name:
+            flash("Protocol name is required.", "warning")
+            return render_if_exists(
+                "add_protocol.html",
+                fallback_endpoint="dashboard",
+                peptides=peptides,
+                template_key=template_key,
+                template_data=template_data,
+                form=request.form,
+            )
+
+        # Best-effort: persist via your project's DB helper if available.
+        try:
+            from database import PeptideDB  # type: ignore
+
+            db = get_session(db_url)
+            try:
+                pdb = PeptideDB(db)
+                create_fn = getattr(pdb, "create_protocol", None) or getattr(pdb, "add_protocol", None)
+                if callable(create_fn):
+                    create_fn(
+                        user_id=session["user_id"],
+                        name=protocol_name,
+                        peptide_id=int(peptide_id) if peptide_id else None,
+                        dose_mcg=float(dose_mcg) if dose_mcg else None,
+                        frequency_per_day=float(frequency_per_day) if frequency_per_day else None,
+                        notes=notes or None,
+                    )
+                    db.commit()
+                    flash("Protocol created.", "success")
+                    return redirect(url_for("protocols"))
+        except Exception:
+            app.logger.exception("add_protocol persistence not available; using stub fallback.")
+
+        flash("Protocol form submitted, but persistence is not wired yet.", "info")
         return redirect(url_for("dashboard"))
-    return render_if_exists("add_protocol.html", fallback_endpoint="dashboard")
+
+    # Pre-fill fields from template if present.
+    prefill = {
+        "protocol_name": template_data.get("protocol_name") if template_data else "",
+        "peptide_common": template_data.get("name") if template_data else "",
+    }
+
+    return render_if_exists(
+        "add_protocol.html",
+        fallback_endpoint="dashboard",
+        peptides=peptides,
+        template_key=template_key,
+        template_data=template_data,
+        prefill=prefill,
+    )
+
 
 @app.route("/protocols/<int:protocol_id>")
 @login_required
