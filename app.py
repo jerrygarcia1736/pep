@@ -29,10 +29,77 @@ from models import get_session, create_engine, Base as ModelBase
 from nutrition_api import register_nutrition_routes
 
 # -----------------------------------------------------------------------------
+# Goal -> peptide association (educational tags, NOT medical advice)
+# -----------------------------------------------------------------------------
+GOAL_TO_PEPTIDES: dict[str, list[str]] = {
+    # These are *research-context associations* used for organizing content.
+    "fat_loss": ["Semaglutide", "Tirzepatide", "Tesamorelin", "AOD 9604", "CJC-1295", "Ipamorelin"],
+    "muscle_gain": ["CJC-1295", "Ipamorelin", "GHRP-2", "GHRP-6", "IGF-1 LR3"],
+    "injury_recovery": ["BPC-157", "TB-500", "GHK-Cu"],
+    "longevity": ["Epithalon", "MOTS-c", "Thymosin Alpha-1", "NAD+", "CJC-1295"],
+    "skin_health": ["GHK-Cu", "Melanotan II"],
+    "cognitive_enhancement": ["Semax", "Selank", "Noopept", "DSIP"],
+}
+
+GOAL_LABELS: dict[str, str] = {
+    "fat_loss": "Fat Loss",
+    "muscle_gain": "Muscle Gain",
+    "injury_recovery": "Injury Recovery",
+    "longevity": "Longevity",
+    "skin_health": "Skin Health",
+    "cognitive_enhancement": "Cognitive Enhancement",
+}
+
+def _parse_goals(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+        if isinstance(data, list):
+            return [str(x) for x in data]
+    except Exception:
+        pass
+    # Fallback: comma-separated
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+def suggested_peptides_for_goals(goals: list[str]) -> list[dict]:
+    """Return peptide dicts (from DB list) matching selected goals."""
+    # Load peptide catalog from DB
+    peptides_list = _load_peptides_list()
+    wanted_names: set[str] = set()
+    for g in goals:
+        wanted_names.update(GOAL_TO_PEPTIDES.get(g, []))
+
+    def norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+    wanted_norm = {norm(n) for n in wanted_names}
+    matches: list[dict] = []
+    for p in peptides_list:
+        name = (p.get("name") or p.get("peptide_name") or "").strip()
+        if not name:
+            continue
+        if norm(name) in wanted_norm:
+            matches.append(p)
+    return matches
+
+
+# -----------------------------------------------------------------------------
 # Flask app
 # -----------------------------------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+
+# Jinja filter for parsing JSON in templates
+@app.template_filter('from_json')
+def from_json_filter(value):
+    """Parse JSON string in templates"""
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except:
+        return []
 
 # -----------------------------------------------------------------------------
 # Models
@@ -47,14 +114,6 @@ class User(ModelBase):
     tier = Column(String(20), nullable=False, default="free")  # free | tier1 | tier2 | admin
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Onboarding / compliance
-    disclaimer_accepted_at = Column(DateTime, nullable=True)
-    disclaimer_version = Column(String(20), nullable=True, default="v1")
-    profile_json = Column(Text, nullable=True)  # stores small JSON blob
-    profile_completed = Column(Boolean, nullable=False, default=False)
-    # Pep AI trial metering
-    pep_ai_uses = Column(Integer, nullable=False, default=0)
-
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
 
@@ -62,6 +121,17 @@ class User(ModelBase):
         return check_password_hash(self.password_hash, password)
 
 # Food log model for nutrition tracking
+
+class PepAIUsage(ModelBase):
+    """Tracks Pep AI usage for free-tier limits (one row per user)."""
+    __tablename__ = "pep_ai_usage"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, unique=True)
+    used = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class FoodLog(ModelBase):
     __tablename__ = "food_logs"
     
@@ -90,9 +160,28 @@ class PasswordResetToken(ModelBase):
     expires_at = Column(DateTime, nullable=False)
     used = Column(Integer, default=0)  # 0 = not used, 1 = used
 
+# User Profile model for personalized AI
+class UserProfile(ModelBase):
+    __tablename__ = "user_profiles"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, unique=True, nullable=False)
+    age = Column(Integer)
+    weight_lbs = Column(Float)
+    height_inches = Column(Float)
+    gender = Column(String(20))
+    goals = Column(String(500))
+    experience_level = Column(String(20))
+    medical_notes = Column(String(1000))
+    completed_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 # -----------------------------------------------------------------------------
 # DB init + migration
 # -----------------------------------------------------------------------------
+FREE_PEP_AI_LIMIT = int(os.environ.get("FREE_PEP_AI_LIMIT", 10))
+
 db_url = Config.DATABASE_URL
 engine = create_engine(db_url)
 
@@ -112,32 +201,6 @@ def ensure_users_tier_column(engine) -> None:
                     conn.execute(text("ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free';"))
     except Exception as e:
         print(f"Warning: could not ensure users.tier column: {e}")
-
-
-def ensure_users_onboarding_columns(engine) -> None:
-    """Add onboarding + Pep AI metering columns on legacy DBs (safe no-op if already present)."""
-    try:
-        dialect = (engine.dialect.name or "").lower()
-        if dialect.startswith("postgres"):
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS disclaimer_accepted_at TIMESTAMP NULL;"))
-                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS disclaimer_version VARCHAR(20) DEFAULT 'v1';"))
-                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS profile_json TEXT NULL;"))
-                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS profile_completed BOOLEAN DEFAULT FALSE;"))
-                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS pep_ai_uses INTEGER DEFAULT 0;"))
-        elif dialect.startswith("sqlite"):
-            with engine.begin() as conn:
-                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(users);")).fetchall()]
-                def add(col_sql: str, col_name: str):
-                    if col_name not in cols:
-                        conn.execute(text(col_sql))
-                add("ALTER TABLE users ADD COLUMN disclaimer_accepted_at DATETIME;", "disclaimer_accepted_at")
-                add("ALTER TABLE users ADD COLUMN disclaimer_version VARCHAR(20) DEFAULT 'v1';", "disclaimer_version")
-                add("ALTER TABLE users ADD COLUMN profile_json TEXT;", "profile_json")
-                add("ALTER TABLE users ADD COLUMN profile_completed BOOLEAN DEFAULT 0;", "profile_completed")
-                add("ALTER TABLE users ADD COLUMN pep_ai_uses INTEGER DEFAULT 0;", "pep_ai_uses")
-    except Exception as e:
-        print(f"Warning: could not ensure users onboarding columns: {e}")
 
 ModelBase.metadata.create_all(engine)
 ensure_users_tier_column(engine)
@@ -161,35 +224,26 @@ def tier_at_least(tier: str, minimum: str) -> bool:
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        # Auth gate
         if "user_id" not in session:
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
-
-        # Onboarding gates (allowlist certain endpoints)
-        allow = {
-            "login", "register", "logout",
-            "static",
-            "medical_disclaimer", "terms_of_service",
-            "onboarding_step1", "onboarding_step2", "upgrade",
-            "api_chat",  # we gate inside the endpoint
-            "forgot_password", "reset_password", "reset_password_token",
-        }
-        ep = request.endpoint or ""
-        if ep in allow or ep.startswith("static"):
-            return f(*args, **kwargs)
-
-        user = get_current_user()
-        if not user:
-            flash("Please log in.", "warning")
-            return redirect(url_for("login"))
-
-        # Require disclaimer + profile completion before most app areas
-        if not getattr(user, "disclaimer_accepted_at", None) or not getattr(user, "profile_completed", False):
-            return redirect(url_for("onboarding_step1"))
-
+        
+        # Check if user has completed profile.
+        # Since profile setup is now integrated into the dashboard, we allow the dashboard
+        # to load even if the profile is incomplete, and we redirect other protected pages
+        # back to the dashboard until the profile is completed.
+        if f.__name__ not in ("profile_setup", "dashboard", "chat", "api_chat"):
+            db = get_session(db_url)
+            try:
+                profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
+                if not profile or not profile.completed_at:
+                    return redirect(url_for("dashboard"))
+            finally:
+                db.close()
+        
         return f(*args, **kwargs)
     return wrapper
+
 def get_current_user():
     if "user_id" not in session:
         return None
@@ -215,13 +269,43 @@ def inject_template_helpers():
         return name in app.view_functions
 
     if not user:
-        return {"current_user": AnonymousUser(), "has_endpoint": has_endpoint, "tier_at_least": tier_at_least}
+        # Not logged in
+        return {
+            "current_user": AnonymousUser(),
+            "has_endpoint": has_endpoint,
+            "tier_at_least": tier_at_least,
+            "pep_ai_remaining": (lambda: None),
+        }
 
+    # Logged in
     user.is_authenticated = True
     if not getattr(user, "tier", None):
         user.tier = "free"
 
-    return {"current_user": user, "has_endpoint": has_endpoint, "tier_at_least": tier_at_least}
+    def pep_ai_remaining() -> int | None:
+        """Remaining free Pep AI uses for current user.
+        - None means unlimited (tier1+)
+        - 0+ means remaining free uses for free tier
+        """
+        try:
+            if tier_at_least(user.tier, "tier1"):
+                return None
+            db = get_session(db_url)
+            try:
+                usage = db.query(PepAIUsage).filter_by(user_id=user.id).first()
+                used = usage.used if usage else 0
+                return max(FREE_PEP_AI_LIMIT - used, 0)
+            finally:
+                db.close()
+        except Exception:
+            return None
+
+    return {
+        "current_user": user,
+        "has_endpoint": has_endpoint,
+        "tier_at_least": tier_at_least,
+        "pep_ai_remaining": pep_ai_remaining,
+    }
 
 # -----------------------------------------------------------------------------
 # Utility: render template if it exists
@@ -373,34 +457,20 @@ PROTOCOL_TEMPLATES: dict[str, dict[str, str]] = {
 # -----------------------------------------------------------------------------
 # Core routes
 # -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Onboarding helpers
-# -----------------------------------------------------------------------------
-FREE_PEP_AI_LIMIT = int(os.environ.get("FREE_PEP_AI_LIMIT", "10"))
-
-def _get_profile_dict(user: User) -> dict:
-    try:
-        return json.loads(user.profile_json) if getattr(user, "profile_json", None) else {}
-    except Exception:
-        return {}
-
-def _set_profile_dict(db, user: User, data: dict) -> None:
-    user.profile_json = json.dumps(data, ensure_ascii=False)
-    db.add(user)
-    db.commit()
-
-def _pep_ai_remaining(user: User) -> int:
-    if tier_at_least(getattr(user, "tier", "free"), "tier1"):
-        return 10**9
-    used = int(getattr(user, "pep_ai_uses", 0) or 0)
-    return max(0, FREE_PEP_AI_LIMIT - used)
-
 @app.route("/")
 def index():
     if "user_id" in session:
         return redirect(url_for("dashboard"))
     return render_if_exists("index.html", fallback_endpoint="register")
+
+# -----------------------------------------------------------------------------
+# Medical Disclaimer
+# -----------------------------------------------------------------------------
+@app.route("/medical-disclaimer")
+def medical_disclaimer():
+    """Medical disclaimer page (linked from the global banner)."""
+    return render_if_exists("medical_disclaimer.html", fallback_endpoint="index")
+
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -408,7 +478,6 @@ def register():
         username = (request.form.get("username") or "").strip()
         email = (request.form.get("email") or "").strip()
         password = (request.form.get("password") or "").strip()
-        accept_disclaimer = (request.form.get("accept_disclaimer") or "").strip()
 
         if not username or not email or not password:
             flash("All fields are required.", "error")
@@ -470,12 +539,14 @@ def logout():
 @login_required
 def dashboard():
     stats, protocols, recent_injections = _compute_dashboard_context()
+    profile = get_user_profile(session["user_id"])
     return render_if_exists(
         "dashboard.html",
         fallback_endpoint="index",
         stats=stats,
         protocols=protocols,
         recent_injections=recent_injections,
+        profile=profile,
     )
 
 # -----------------------------------------------------------------------------
@@ -575,6 +646,77 @@ def reset_password(token):
         
         return render_if_exists("reset_password.html", fallback_endpoint="login", token=token, email=user.email)
     
+    finally:
+        db.close()
+
+# -----------------------------------------------------------------------------
+# User Profile Routes
+# -----------------------------------------------------------------------------
+@app.route("/profile-setup", methods=["GET", "POST"])
+@login_required
+def profile_setup():
+    """User profile setup/edit page"""
+    db = get_session(db_url)
+    try:
+        profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
+        
+        if request.method == "POST":
+            age = request.form.get("age")
+            weight_lbs = request.form.get("weight_lbs")
+            height_inches = request.form.get("height_inches")
+            gender = request.form.get("gender")
+            goals = request.form.getlist("goals")
+            experience_level = request.form.get("experience_level")
+            medical_notes = request.form.get("medical_notes", "").strip()
+            
+            if not all([age, weight_lbs, height_inches, gender, experience_level]):
+                flash("Please fill in all required fields.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
+            if not goals:
+                flash("Please select at least one goal.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
+            if profile:
+                profile.age = int(age)
+                profile.weight_lbs = float(weight_lbs)
+                profile.height_inches = int(height_inches)
+                profile.gender = gender
+                profile.goals = json.dumps(goals)
+                profile.experience_level = experience_level
+                profile.medical_notes = medical_notes
+                profile.completed_at = datetime.utcnow()
+                profile.updated_at = datetime.utcnow()
+                flash("Profile updated successfully!", "success")
+            else:
+                profile = UserProfile(
+                    user_id=session["user_id"],
+                    age=int(age),
+                    weight_lbs=float(weight_lbs),
+                    height_inches=int(height_inches),
+                    gender=gender,
+                    goals=json.dumps(goals),
+                    experience_level=experience_level,
+                    medical_notes=medical_notes,
+                    completed_at=datetime.utcnow()
+                )
+                db.add(profile)
+                flash("Profile created successfully!", "success")
+            
+            db.commit()
+            return redirect(url_for("dashboard"))
+        
+        return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+        
+    finally:
+        db.close()
+
+
+def get_user_profile(user_id):
+    """Helper function to get user profile"""
+    db = get_session(db_url)
+    try:
+        return db.query(UserProfile).filter_by(user_id=user_id).first()
     finally:
         db.close()
 
@@ -1098,103 +1240,129 @@ def chat():
     return render_if_exists("chat.html", fallback_endpoint="dashboard")
 
 
+# -----------------------------------------------------------------------------
+# Pep AI (Chat) API
+# -----------------------------------------------------------------------------
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+def _pep_ai_system_prompt() -> str:
+    return (
+        "You are Pep AI inside PeptideTracker.ai. "
+        "You provide educational, research-oriented information only. "
+        "No medical advice, diagnosis, treatment recommendations, or dosing instructions. "
+        "If the user asks for dosing, prescriptions, or medical decisions, refuse and suggest they consult a licensed clinician. "
+        "You can help with math (e.g., reconstitution concentration calculations) and summarize study abstracts at a high level. "
+        "Always encourage safety, verification, and professional guidance."
+    )
+
+def _call_openai_chat(message: str) -> str:
+    if not OPENAI_API_KEY:
+        return "Pep AI is not configured yet (missing OPENAI_API_KEY). Please contact support."
+
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": _pep_ai_system_prompt()},
+            {"role": "user", "content": message},
+        ],
+        "temperature": 0.4,
+        "max_tokens": 500,
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=25)
+        if resp.status_code == 401:
+            return "Pep AI configuration error: invalid OpenAI key."
+        if resp.status_code >= 400:
+            return f"Pep AI error ({resp.status_code}). Please try again."
+        data = resp.json()
+        return (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip() or "No response."
+    except requests.exceptions.Timeout:
+        return "Pep AI timed out. Please try again."
+    except Exception as e:
+        print(f"Pep AI exception: {e}")
+        return "Pep AI encountered an error. Please try again."
+
+@app.route("/api/goal-peptides", methods=["POST"])
+@login_required
+def api_goal_peptides():
+    payload = request.get_json(silent=True) or {}
+    goals = payload.get("goals") or []
+    if not isinstance(goals, list):
+        goals = []
+    peptides = suggested_peptides_for_goals([str(g) for g in goals])
+    # Return light payload: name + id + short description if present
+    items = []
+    for p in peptides:
+        items.append({
+            "id": p.get("id") or p.get("peptide_id"),
+            "name": p.get("name") or p.get("peptide_name"),
+            "summary": p.get("summary") or p.get("description") or "",
+        })
+    return jsonify({"items": items})
+
+
+@app.route("/api/chat", methods=["POST"])
+@login_required
+def api_chat():
+    """Pep AI chat endpoint used by templates/chat.html."""
+    db = get_session(db_url)
+    try:
+        user = db.query(User).filter_by(id=session.get("user_id")).first()
+        if not user:
+            return jsonify({"error": "auth_required", "message": "Please log in."}), 401
+
+        data = request.get_json(silent=True) or {}
+        message = (data.get("message") or "").strip()
+        if not message:
+            return jsonify({"error": "bad_request", "message": "Message is required"}), 400
+
+        # Free-tier metering: 10 free uses, then require upgrade.
+        remaining = None
+        if not tier_at_least(getattr(user, "tier", "free"), "tier1"):
+            usage = db.query(PepAIUsage).filter_by(user_id=user.id).first()
+            if not usage:
+                usage = PepAIUsage(user_id=user.id, used=0)
+                db.add(usage)
+                db.commit()
+
+            if usage.used >= FREE_PEP_AI_LIMIT:
+                return jsonify({
+                    "error": "limit_reached",
+                    "message": "You’ve used your 10 free Pep AI questions.",
+                    "remaining": 0
+                }), 402
+
+            # Count this request up-front (prevents accidental free retries).
+            usage.used += 1
+            db.commit()
+            remaining = max(FREE_PEP_AI_LIMIT - usage.used, 0)
+
+        reply = _call_openai_chat(message)
+
+        resp = {"reply": reply}
+        if remaining is not None:
+            resp["remaining"] = remaining
+        return jsonify(resp)
+    except Exception as e:
+        print(f"/api/chat error: {e}")
+        return jsonify({"error": "server_error", "message": "Server error"}), 500
+    finally:
+        db.close()
+
+
+
+
 @app.route("/upgrade")
-@login_required
 def upgrade():
+    # Placeholder upgrade page (Stripe integration can replace this later)
     return render_if_exists("upgrade.html", fallback_endpoint="dashboard")
-
-@app.route("/onboarding/step-1", methods=["GET", "POST"])
-@login_required
-def onboarding_step1():
-    db = get_session(db_url)
-    try:
-        user = db.query(User).filter_by(id=session["user_id"]).first()
-        if not user:
-            flash("Please log in.", "warning")
-            return redirect(url_for("login"))
-
-        profile = _get_profile_dict(user)
-
-        if request.method == "POST":
-            # Disclaimer acceptance (required)
-            if not getattr(user, "disclaimer_accepted_at", None):
-                accept = (request.form.get("accept_disclaimer") or "").strip().lower()
-                if accept not in {"on", "true", "1", "yes"}:
-                    flash("You must acknowledge the disclaimer to continue.", "error")
-                    return render_if_exists("onboarding_step1.html", fallback_endpoint="dashboard", profile=profile)
-
-                user.disclaimer_accepted_at = datetime.utcnow()
-                user.disclaimer_version = "v1"
-
-            goals = request.form.getlist("goals")
-            experience = (request.form.get("experience") or "").strip()
-
-            if not goals:
-                flash("Please select at least one goal.", "error")
-                return render_if_exists("onboarding_step1.html", fallback_endpoint="dashboard", profile=profile)
-
-            if experience not in {"beginner", "intermediate", "advanced"}:
-                flash("Please select your experience level.", "error")
-                return render_if_exists("onboarding_step1.html", fallback_endpoint="dashboard", profile=profile)
-
-            profile["goals"] = goals
-            profile["experience"] = experience
-
-            _set_profile_dict(db, user, profile)
-            flash("Step 1 complete.", "success")
-            return redirect(url_for("onboarding_step2"))
-
-        return render_if_exists("onboarding_step1.html", fallback_endpoint="dashboard", profile=profile)
-
-    finally:
-        db.close()
-
-@app.route("/onboarding/step-2", methods=["GET", "POST"])
-@login_required
-def onboarding_step2():
-    db = get_session(db_url)
-    try:
-        user = db.query(User).filter_by(id=session["user_id"]).first()
-        if not user:
-            flash("Please log in.", "warning")
-            return redirect(url_for("login"))
-
-        profile = _get_profile_dict(user)
-
-        # If step1 not done, send back
-        if not profile.get("goals") or not profile.get("experience"):
-            return redirect(url_for("onboarding_step1"))
-
-        if request.method == "POST":
-            age_range = (request.form.get("age_range") or "").strip()
-            training_days = (request.form.get("training_days") or "").strip()
-
-            valid_age = {"18-24","25-34","35-44","45-54","55-64","65+"}
-            if age_range not in valid_age:
-                flash("Please select an age range.", "error")
-                return render_if_exists("onboarding_step2.html", fallback_endpoint="dashboard", profile=profile)
-
-            try:
-                td = int(training_days)
-                if td < 0 or td > 7:
-                    raise ValueError()
-            except Exception:
-                flash("Training days must be 0–7.", "error")
-                return render_if_exists("onboarding_step2.html", fallback_endpoint="dashboard", profile=profile)
-
-            profile["age_range"] = age_range
-            profile["training_days"] = td
-            profile["completed_at"] = datetime.utcnow().isoformat()
-
-            user.profile_completed = True
-            _set_profile_dict(db, user, profile)
-
-            flash("Setup complete — welcome!", "success")
-            return redirect(url_for("dashboard"))
-
-        return render_if_exists("onboarding_step2.html", fallback_endpoint="dashboard", profile=profile)
-    finally:
-        db.close()
 
 
 # -----------------------------------------------------------------------------
