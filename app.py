@@ -11,13 +11,27 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import requests
 import secrets
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any, Dict, List, Tuple
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+# Optional OCR dependencies (installed via requirements when enabled)
+try:
+    import easyocr  # type: ignore
+    import numpy as np  # type: ignore
+    import cv2  # type: ignore
+    from PIL import Image  # type: ignore
+except Exception:  # pragma: no cover
+    easyocr = None
+    np = None
+    cv2 = None
+    Image = None
+
+
+from flask import Flask, render_template, render_template_string, request, redirect, url_for, flash, session, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from jinja2 import TemplateNotFound
 
@@ -44,6 +58,132 @@ def from_json_filter(value):
         return json.loads(value)
     except:
         return []
+
+# -----------------------------------------------------------------------------
+# OCR helpers (EasyOCR; no Docker/system packages required)
+# -----------------------------------------------------------------------------
+_OCR_READER = None
+
+def _get_ocr_reader():
+    """Lazy-load OCR reader so we don't pay startup cost on every worker."""
+    global _OCR_READER
+    if _OCR_READER is not None:
+        return _OCR_READER
+    if easyocr is None:
+        return None
+    # English only keeps it lighter/faster.
+    _OCR_READER = easyocr.Reader(["en"], gpu=False)
+    return _OCR_READER
+
+def _preprocess_for_ocr(image_bytes: bytes):
+    """Return a numpy image (grayscale) optimized for OCR."""
+    if np is None or cv2 is None:
+        return None
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Contrast + denoise + threshold improves handwriting/marker text.
+    gray = cv2.bilateralFilter(gray, 7, 50, 50)
+    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return th
+
+def _ocr_lines(image_bytes: bytes) -> list[dict[str, Any]]:
+    """Run OCR and return [{text, conf}, ...]"""
+    reader = _get_ocr_reader()
+    if reader is None or cv2 is None:
+        return []
+    img = _preprocess_for_ocr(image_bytes)
+    if img is None:
+        return []
+    # EasyOCR returns list of (bbox, text, conf)
+    results = reader.readtext(img)
+    out: list[dict[str, Any]] = []
+    for _bbox, txt, conf in results:
+        txt = (txt or "").strip()
+        if txt:
+            out.append({"text": txt, "conf": float(conf) if conf is not None else 0.0})
+    return out
+
+def _normalize_token(s: str) -> str:
+    s = (s or "").upper()
+    s = "".join(ch for ch in s if ch.isalnum())
+    return s
+
+def _extract_tokens(lines: list[dict[str, Any]]) -> list[str]:
+    tokens: list[str] = []
+    for ln in lines:
+        t = ln.get("text", "")
+        for part in re.split(r"\s+", t.strip()):
+            nt = _normalize_token(part)
+            if nt and nt not in tokens:
+                tokens.append(nt)
+    return tokens
+
+def _peptide_name_candidates(ocr_lines: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
+    """Return ranked peptide candidates from OCR output."""
+    try:
+        import difflib
+    except Exception:
+        difflib = None  # type: ignore
+
+    peptides = _load_peptides_list()  # may be [] if DB missing; OK
+    # Normalize peptide list into [{name, common_name}]
+    normalized: list[tuple[str, str]] = []
+    for p in peptides:
+        name = ""
+        common = ""
+        if isinstance(p, dict):
+            name = str(p.get("name") or p.get("peptide") or "")
+            common = str(p.get("common_name") or p.get("common") or "")
+        else:
+            name = str(getattr(p, "name", "") or getattr(p, "peptide", "") or "")
+            common = str(getattr(p, "common_name", "") or "")
+        if name:
+            normalized.append((name, common))
+
+    tokens = _extract_tokens(ocr_lines)
+    joined = _normalize_token(" ".join(tokens))
+
+    scored: list[tuple[float, str]] = []
+    for name, common in normalized:
+        cand = name.strip()
+        n = _normalize_token(cand)
+        if not n:
+            continue
+
+        # Score: token containment + fuzzy similarity
+        score = 0.0
+        if n in joined:
+            score += 0.9
+        # Handle short handwritten like "BPC" matching "BPC157"
+        if any(t and (t in n or n in t) for t in tokens):
+            score += 0.4
+
+        if difflib is not None:
+            score += difflib.SequenceMatcher(None, n, joined).ratio() * 0.7
+
+        # Slight boost if common_name matches too
+        if common:
+            c = _normalize_token(common)
+            if c and c in joined:
+                score += 0.2
+
+        scored.append((score, cand))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out: list[dict[str, Any]] = []
+    seen = set()
+    for score, name in scored:
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append({"name": name, "score": round(float(score), 3)})
+        if len(out) >= limit:
+            break
+    return out
 
 # -----------------------------------------------------------------------------
 # Models
@@ -244,6 +384,188 @@ def require_onboarding(view_func):
             return redirect(url_for("onboarding_step_2"))
         return view_func(*args, **kwargs)
     return wrapper
+# -----------------------------------------------------------------------------
+# Scan (mobile camera): Scan Peptides + Scan Food
+# -----------------------------------------------------------------------------
+_SCAN_BASE_HTML = """<!doctype html>
+<html>
+<head>
+  <meta charset='utf-8' />
+  <meta name='viewport' content='width=device-width, initial-scale=1' />
+  <title>{{ title }}</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:18px;}
+    .card{max-width:720px;margin:0 auto;padding:16px;border:1px solid #e6e6e6;border-radius:14px;}
+    h1{font-size:20px;margin:0 0 8px;}
+    p{color:#444;line-height:1.35}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    input[type=file]{width:100%}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;background:#111;color:#fff;font-weight:600}
+    button:disabled{opacity:.55}
+    pre{white-space:pre-wrap;background:#f7f7f7;padding:12px;border-radius:10px;border:1px solid #eee}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid #ddd;margin:6px 6px 0 0;cursor:pointer}
+    .muted{color:#666;font-size:13px}
+    a{color:#0b5fff;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class='card'>
+    <h1>{{ title }}</h1>
+    <p class='muted'>Tip: fill the frame with what you want scanned. Good lighting helps.</p>
+    <div class='row'>
+      <input id='img' type='file' accept='image/*' capture='environment' />
+      <button id='go' disabled>Scan</button>
+    </div>
+    <p id='status' class='muted'></p>
+    <div id='candidates'></div>
+    <pre id='out' style='display:none'></pre>
+    <div id='actions' style='display:none;margin-top:10px'></div>
+    <p class='muted' style='margin-top:14px'>OCR is assistive — always confirm.</p>
+  </div>
+
+<script>
+const btn = document.getElementById('go');
+const file = document.getElementById('img');
+const out = document.getElementById('out');
+const statusEl = document.getElementById('status');
+const cand = document.getElementById('candidates');
+const actions = document.getElementById('actions');
+
+file.addEventListener('change', () => btn.disabled = !file.files.length);
+
+function setStatus(s){ statusEl.textContent = s || ''; }
+
+btn.addEventListener('click', async () => {
+  if (!file.files.length) return;
+  btn.disabled = true;
+  out.style.display='none';
+  cand.innerHTML = '';
+  actions.style.display='none';
+  actions.innerHTML = '';
+  setStatus('Scanning…');
+
+  const fd = new FormData();
+  fd.append('image', file.files[0]);
+
+  try{
+    const res = await fetch('{{ api_endpoint }}', { method:'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok){
+      throw new Error(data && data.error ? data.error : 'Scan failed');
+    }
+    setStatus('Done.');
+    out.style.display='block';
+    out.textContent = data.raw_text || '';
+
+    if (data.candidates && data.candidates.length){
+      const h = document.createElement('div');
+      h.className='muted';
+      h.textContent='Suggestions:';
+      cand.appendChild(h);
+
+      data.candidates.forEach(c => {
+        const el = document.createElement('span');
+        el.className='pill';
+        el.textContent = c.name + ' (' + c.score + ')';
+        el.onclick = () => {
+          navigator.clipboard?.writeText(c.name);
+          setStatus('Copied: ' + c.name);
+          if (data.next_url){
+            actions.style.display='block';
+            actions.innerHTML = `<a href="${data.next_url}">Continue</a>`;
+          }
+        };
+        cand.appendChild(el);
+      });
+    }
+
+    if (data.next_url){
+      actions.style.display='block';
+      actions.innerHTML = `<a href="${data.next_url}">Continue</a>`;
+    }
+  }catch(e){
+    setStatus('Error: ' + e.message);
+  }finally{
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
+"""
+
+@app.route("/scan-peptides", methods=["GET"])
+@login_required
+@require_onboarding
+def scan_peptides():
+    """Mobile camera OCR to capture handwritten/printed peptide labels."""
+    # Prefer a real template if you add one later.
+    try:
+        return render_template("scan_peptides.html", title="Scan Peptides", api_endpoint=url_for("api_ocr_peptides"))
+    except TemplateNotFound:
+        return render_template_string(_SCAN_BASE_HTML, title="Scan Peptides", api_endpoint=url_for("api_ocr_peptides"))
+
+@app.route("/scan-food", methods=["GET"])
+@login_required
+@require_onboarding
+def scan_food():
+    """Mobile camera OCR to capture food text (labels/receipts)."""
+    try:
+        return render_template("scan_food.html", title="Scan Food", api_endpoint=url_for("api_ocr_food"))
+    except TemplateNotFound:
+        return render_template_string(_SCAN_BASE_HTML, title="Scan Food", api_endpoint=url_for("api_ocr_food"))
+
+@app.route("/api/ocr/peptides", methods=["POST"])
+@login_required
+@require_onboarding
+def api_ocr_peptides():
+    if easyocr is None:
+        return jsonify({"error": "OCR not installed. Add easyocr deps and redeploy."}), 503
+
+    f = request.files.get("image")
+    if not f:
+        return jsonify({"error": "Missing image"}), 400
+
+    image_bytes = f.read()
+    lines = _ocr_lines(image_bytes)
+    raw_text = "\n".join([ln["text"] for ln in lines])[:2000]
+
+    candidates = _peptide_name_candidates(lines, limit=8)
+    # Send them to the existing Add Vial page to finish details.
+    next_url = url_for("add_vial")
+
+    return jsonify({
+        "raw_text": raw_text,
+        "lines": lines[:30],
+        "candidates": candidates,
+        "next_url": next_url
+    })
+
+@app.route("/api/ocr/food", methods=["POST"])
+@login_required
+@require_onboarding
+def api_ocr_food():
+    if easyocr is None:
+        return jsonify({"error": "OCR not installed. Add easyocr deps and redeploy."}), 503
+
+    f = request.files.get("image")
+    if not f:
+        return jsonify({"error": "Missing image"}), 400
+
+    image_bytes = f.read()
+    lines = _ocr_lines(image_bytes)
+    # Create a usable query string for your existing /log-food flow
+    raw_text = "\n".join([ln["text"] for ln in lines])[:2000]
+    query = " ".join([ln["text"] for ln in lines])[:400].strip()
+    next_url = url_for("log_food", q=query) if query else url_for("log_food")
+
+    return jsonify({
+        "raw_text": raw_text,
+        "lines": lines[:30],
+        "candidates": [],  # food suggestions intentionally omitted (depends on your nutrition provider)
+        "next_url": next_url
+    })
+
 
 
 # -----------------------------------------------------------------------------
@@ -1023,7 +1345,7 @@ def log_food():
             print(f"Calorie Ninja API error: {e}")
             flash("Error connecting to nutrition database. Please try again.", "error")
     
-    return render_if_exists("log_food.html", fallback_endpoint="nutrition")
+    return render_if_exists("log_food.html", fallback_endpoint="nutrition", prefill=(request.args.get("q") or ""))
 
 @app.route("/delete-food/<int:food_id>", methods=["POST"])
 @login_required

@@ -15,10 +15,3 @@ python-dotenv==1.0.1
 
 # Production server
 gunicorn==23.0.0
-
-
-# OCR (camera scan features)
-easyocr==1.7.2
-pillow==11.1.0
-opencv-python-headless==4.10.0.84
-numpy==2.2.2
