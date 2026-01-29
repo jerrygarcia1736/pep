@@ -230,33 +230,22 @@ def has_accepted_disclaimer(user_id: int) -> bool:
     finally:
         db.close()
 
-
 def require_onboarding(view_func):
-    """Soft onboarding gate.
-
-    We *do not block* access to features. We only nudge users to complete profile + disclaimer.
-    This avoids mobile users getting stuck on profile/disclaimer flows.
-    """
     @wraps(view_func)
     def wrapper(*args, **kwargs):
         u = get_current_user()
         if not u:
             return redirect(url_for("login"))
-
-        # If the user explicitly skipped, don't nag.
-        if session.get("profile_skipped"):
-            return view_func(*args, **kwargs)
-
-        # One gentle banner per session (no redirects).
-        try:
-            if (not is_profile_complete(u.id) or not has_accepted_disclaimer(u.id)) and not session.get("_setup_nag_shown"):
-                flash("Profile + disclaimer are optional — you can complete them later in Settings to personalize Pep AI.", "info")
-                session["_setup_nag_shown"] = True
-        except Exception:
-            pass
-
+        # Step 1: profile
+        if not is_profile_complete(u.id) and request.endpoint not in {"profile_setup", "logout", "onboarding_step_1", "onboarding_step_2", "medical_disclaimer"}:
+            return redirect(url_for("onboarding_step_1"))
+        # Step 2: disclaimer acknowledgement
+        if is_profile_complete(u.id) and not has_accepted_disclaimer(u.id) and request.endpoint not in {"onboarding_step_2", "logout", "medical_disclaimer"}:
+            return redirect(url_for("onboarding_step_2"))
         return view_func(*args, **kwargs)
     return wrapper
+
+
 # -----------------------------------------------------------------------------
 # Jinja helpers
 # -----------------------------------------------------------------------------
@@ -903,35 +892,15 @@ def scan_food():
 @app.route("/scan-nutrition", methods=["GET"])
 @login_required
 def scan_nutrition():
-    """Top-nav nutrition scan entry.
-
-    Prefer the camera scanner (/scan-food) if available; otherwise fall back to Nutrition dashboard.
-    """
-    if has_endpoint("scan_food"):
-        # preserve autocam query
-        qs = request.query_string.decode("utf-8") if request.query_string else ""
-        target = url_for("scan_food")
-        if qs:
-            target = target + ("?" + qs)
-        return redirect(target)
-
+    # Alias route for clarity in the top nav; use existing Nutrition page.
     return redirect(url_for("nutrition")) if has_endpoint("nutrition") else redirect("/nutrition")
-
 
 
 @app.route("/scan-peptides", methods=["GET"])
 @login_required
 def scan_peptides():
     peptides = _load_peptides_list()
-    peptide_names = []
-    for p in peptides:
-        name = None
-        if isinstance(p, dict):
-            name = p.get("name")
-        else:
-            name = getattr(p, "name", None)
-        if name:
-            peptide_names.append(str(name))
+    peptide_names = [p.get("name","") for p in peptides if p.get("name")]
 
     html = """<!doctype html>
 <html>
@@ -945,7 +914,6 @@ def scan_peptides():
     .muted{color:#666;font-size:13px;line-height:1.4}
     input[type=file]{width:100%;}
     .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
-    .btn.secondary{background:#fff;color:#111827;}
     .btn:disabled{opacity:.5;cursor:not-allowed;}
     .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
     textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
@@ -953,7 +921,6 @@ def scan_peptides():
     .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
     .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
     .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
-    video{max-width:100%; border-radius:12px; border:1px solid #e6e6ef;}
   </style>
 </head>
 <body>
@@ -961,7 +928,7 @@ def scan_peptides():
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div>
         <h1>📦 Scan Peptides</h1>
-        <div class="muted">Use your camera (recommended) or upload a photo of the box/kit label. We’ll OCR and suggest matches.</div>
+        <div class="muted">Take a photo of the box/kit label (handwritten or printed). We’ll extract text and suggest peptide matches.</div>
       </div>
       <div class="toplinks">
         <a class="linkbtn" href="/add-vial">➕ Add Vial</a>
@@ -970,17 +937,6 @@ def scan_peptides():
     </div>
 
     <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light.</div></div>
-
-    <div class="row">
-      <button class="btn secondary" id="openCamBtn" type="button">📷 Use Camera</button>
-      <button class="btn" id="captureBtn" type="button" style="display:none;">● Capture</button>
-      <button class="btn secondary" id="stopCamBtn" type="button" style="display:none;">✕ Stop</button>
-    </div>
-
-    <div id="camWrap" style="display:none; margin-top:10px;">
-      <video id="camVideo" playsinline autoplay></video>
-      <canvas id="camCanvas" style="display:none;"></canvas>
-    </div>
 
     <div style="margin-top:10px;">
       <input id="pepPhoto" type="file" accept="image/*" capture="environment" />
@@ -1010,78 +966,6 @@ def scan_peptides():
     const matchBox = document.getElementById("matchBox");
     const matchChips = document.getElementById("matchChips");
 
-    // --- Camera (mobile + desktop supported) ---
-    let camStream = null;
-    const camWrap = document.getElementById("camWrap");
-    const camVideo = document.getElementById("camVideo");
-    const camCanvas = document.getElementById("camCanvas");
-    const openCamBtn = document.getElementById("openCamBtn");
-    const captureBtn = document.getElementById("captureBtn");
-    const stopCamBtn = document.getElementById("stopCamBtn");
-
-    async function startCam(){
-      try{
-        camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio:false });
-        camVideo.srcObject = camStream;
-        camWrap.style.display = "block";
-        openCamBtn.style.display = "none";
-        captureBtn.style.display = "inline-flex";
-        stopCamBtn.style.display = "inline-flex";
-      }catch(e){
-        console.error(e);
-        alert("Could not access camera. Use Upload Photo instead.");
-      }
-    }
-    function stopCam(){
-      try{
-        if (camStream) camStream.getTracks().forEach(t => t.stop());
-      }catch(e){}
-      camStream = null;
-      camVideo.srcObject = null;
-      camWrap.style.display = "none";
-      openCamBtn.style.display = "inline-flex";
-      captureBtn.style.display = "none";
-      stopCamBtn.style.display = "none";
-    }
-    function captureToInput(){
-      const w = camVideo.videoWidth || 1280;
-      const h = camVideo.videoHeight || 720;
-      camCanvas.width = w;
-      camCanvas.height = h;
-      const ctx = camCanvas.getContext("2d");
-      ctx.drawImage(camVideo, 0, 0, w, h);
-      camCanvas.toBlob(blob => {
-        if (!blob) return;
-        const file = new File([blob], "peptide_camera.jpg", { type: "image/jpeg" });
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        pepPhoto.files = dt.files;
-        pepPhoto.dispatchEvent(new Event("change", { bubbles:true }));
-        stopCam();
-      }, "image/jpeg", 0.92);
-    }
-    openCamBtn.addEventListener("click", startCam);
-    stopCamBtn.addEventListener("click", stopCam);
-    captureBtn.addEventListener("click", captureToInput);
-
-    // Auto-open camera if ?autocam=1 on mobile
-    window.addEventListener("DOMContentLoaded", () => {
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches;
-      if (!isMobile) return;
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("autocam") !== "1") return;
-      const key = "autocam_once:/scan-peptides";
-      if (sessionStorage.getItem(key) === "1") return;
-      sessionStorage.setItem(key, "1");
-      try{
-        params.delete("autocam");
-        const newUrl = window.location.pathname + (params.toString() ? ("?" + params.toString()) : "");
-        history.replaceState(null, "", newUrl);
-      }catch(e){}
-      setTimeout(startCam, 250);
-    });
-
-    // --- OCR + Matching ---
     pepPhoto.addEventListener("change", () => {
       const file = pepPhoto.files && pepPhoto.files[0];
       btn.disabled = !file;
@@ -1145,6 +1029,7 @@ def scan_peptides():
           matchBox.style.display = "block";
           matchChips.innerHTML = "<div class='muted'>No confident match found — try a closer photo, or just go to Add Vial and select manually.</div>";
         }
+
       }catch(err){
         alert("OCR failed. Try again with brighter lighting and closer focus.");
       }finally{
@@ -1156,6 +1041,8 @@ def scan_peptides():
 </body>
 </html>"""
     return render_template_string(html, peptide_names=peptide_names)
+
+
 @app.before_request
 def _scan_hint_flash():
     try:
@@ -1363,99 +1250,66 @@ def reset_password(token):
 # -----------------------------------------------------------------------------
 # User Profile Routes
 # -----------------------------------------------------------------------------
-
 @app.route("/profile-setup", methods=["GET", "POST"])
 @login_required
 def profile_setup():
-    """User profile setup/edit page (optional).
-
-    - Users can skip at any time (especially on mobile).
-    - We save partial info without forcing all fields.
-    - We only set completed_at when the required set is provided.
-    """
-    # GET skip support: /profile-setup?skip=1
-    if request.method == "GET" and (request.args.get("skip") == "1"):
-        session["profile_skipped"] = True
-        flash("Skipped profile setup. You can complete it later anytime.", "info")
-        return redirect(url_for("dashboard"))
-
+    """User profile setup/edit page"""
     db = get_session(db_url)
     try:
         profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
-
+        
         if request.method == "POST":
-            action = (request.form.get("action") or "").strip().lower()
-            if action in {"skip", "skip_for_now", "skip_for_now_btn", "skipfornow"}:
-                session["profile_skipped"] = True
-                flash("Skipped profile setup. You can complete it later anytime.", "info")
-                return redirect(url_for("dashboard"))
-
-            # Read fields (all optional)
-            age = (request.form.get("age") or "").strip()
-            weight_lbs = (request.form.get("weight_lbs") or "").strip()
-            height_inches = (request.form.get("height_inches") or "").strip()
-            gender = (request.form.get("gender") or "").strip()
+            age = request.form.get("age")
+            weight_lbs = request.form.get("weight_lbs")
+            height_inches = request.form.get("height_inches")
+            gender = request.form.get("gender")
             goals = request.form.getlist("goals")
-            experience_level = (request.form.get("experience_level") or "").strip()
-            medical_notes = (request.form.get("medical_notes") or "").strip()
-
-            def _to_int(v):
-                try:
-                    return int(float(v))
-                except Exception:
-                    return None
-
-            def _to_float(v):
-                try:
-                    return float(v)
-                except Exception:
-                    return None
-
-            # Persist (partial allowed)
-            if not profile:
-                profile = UserProfile(user_id=session["user_id"])
-                db.add(profile)
-
-            profile.age = _to_int(age) if age else profile.age
-            profile.weight_lbs = _to_float(weight_lbs) if weight_lbs else profile.weight_lbs
-            profile.height_inches = _to_float(height_inches) if height_inches else profile.height_inches
-            profile.gender = gender or profile.gender
-            profile.goals = json.dumps(goals) if goals else (profile.goals or None)
-            profile.experience_level = experience_level or profile.experience_level
-            profile.medical_notes = medical_notes or profile.medical_notes
-            profile.updated_at = datetime.utcnow()
-
-            # Mark complete only if the required set is present
-            required_ok = all([
-                profile.age is not None,
-                profile.weight_lbs is not None,
-                profile.height_inches is not None,
-                (profile.gender or "").strip(),
-                (profile.experience_level or "").strip(),
-            ]) and bool(goals)
-
-            if required_ok:
+            experience_level = request.form.get("experience_level")
+            medical_notes = request.form.get("medical_notes", "").strip()
+            
+            if not all([age, weight_lbs, height_inches, gender, experience_level]):
+                flash("Please fill in all required fields.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
+            if not goals:
+                flash("Please select at least one goal.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
+            if profile:
+                profile.age = int(age)
+                profile.weight_lbs = float(weight_lbs)
+                profile.height_inches = int(height_inches)
+                profile.gender = gender
+                profile.goals = json.dumps(goals)
+                profile.experience_level = experience_level
+                profile.medical_notes = medical_notes
                 profile.completed_at = datetime.utcnow()
-                flash("Profile saved!", "success")
+                profile.updated_at = datetime.utcnow()
+                flash("Profile updated successfully!", "success")
             else:
-                # Don't block the user; just save what we have.
-                flash("Saved. You can finish the optional profile later for better personalization.", "info")
-
+                profile = UserProfile(
+                    user_id=session["user_id"],
+                    age=int(age),
+                    weight_lbs=float(weight_lbs),
+                    height_inches=int(height_inches),
+                    gender=gender,
+                    goals=json.dumps(goals),
+                    experience_level=experience_level,
+                    medical_notes=medical_notes,
+                    completed_at=datetime.utcnow()
+                )
+                db.add(profile)
+                flash("Profile created successfully!", "success")
+            
             db.commit()
             return redirect(url_for("dashboard"))
-
+        
         return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
-
+        
     finally:
         db.close()
 
 
-@app.get("/profile-skip")
-@login_required
-def profile_skip():
-    session["profile_skipped"] = True
-    flash("Skipped profile setup. You can complete it later anytime.", "info")
-    return redirect(url_for("dashboard"))
 def get_user_profile(user_id):
     """Helper function to get user profile"""
     db = get_session(db_url)
@@ -1939,6 +1793,149 @@ def calculator():
 @app.route("/peptide-calculator", methods=["GET", "POST"])
 @login_required
 @require_onboarding
+
+# ----------------------------
+# Syringe Check (Dose + BAC verification)
+# ----------------------------
+
+@app.route("/syringe-check")
+@login_required
+def syringe_check():
+    """UI tool to help users sanity-check syringe draws against protocol + vial reconstitution."""
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
+            vials = getattr(pdb, "list_active_vials", lambda: [])()
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocols/vials for syringe check")
+        protocols, vials = [], []
+
+    return render_if_exists(
+        "syringe_check.html",
+        fallback_endpoint="dashboard",
+        protocols=protocols,
+        vials=vials,
+        title="Syringe Check",
+    )
+
+
+@app.route("/api/syringe-check/expected")
+@login_required
+def api_syringe_check_expected():
+    """Return expected draw amounts based on a protocol and vial.
+
+    Query params:
+      - protocol_id (optional)
+      - vial_id (optional)
+      - dose_mcg (optional override)
+      - water_ml (optional override for reconstitution target)
+    """
+    protocol_id = (request.args.get("protocol_id") or "").strip()
+    vial_id = (request.args.get("vial_id") or "").strip()
+    dose_mcg_override = (request.args.get("dose_mcg") or "").strip()
+    water_ml_override = (request.args.get("water_ml") or "").strip()
+
+    protocol = None
+    vial = None
+
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+
+            # Fetch protocol/vial using best-available helpers
+            if protocol_id:
+                getp = getattr(pdb, "get_protocol", None) or getattr(pdb, "get_protocol_by_id", None)
+                if callable(getp):
+                    protocol = getp(int(protocol_id))
+                else:
+                    # fallback: scan active protocols
+                    for p in getattr(pdb, "list_active_protocols", lambda: [])():
+                        if getattr(p, "id", None) == int(protocol_id):
+                            protocol = p
+                            break
+
+            if vial_id:
+                getv = getattr(pdb, "get_vial", None) or getattr(pdb, "get_vial_by_id", None)
+                if callable(getv):
+                    vial = getv(int(vial_id))
+                else:
+                    for v in getattr(pdb, "list_active_vials", lambda: [])():
+                        if getattr(v, "id", None) == int(vial_id):
+                            vial = v
+                            break
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocol/vial in syringe expected API")
+
+    # Extract basics
+    dose_mcg = None
+    try:
+        if dose_mcg_override:
+            dose_mcg = float(dose_mcg_override)
+    except Exception:
+        dose_mcg = None
+
+    if dose_mcg is None and protocol is not None:
+        try:
+            dose_mcg = float(getattr(protocol, "dose_mcg", None))
+        except Exception:
+            dose_mcg = None
+
+    mg_amount = None
+    water_ml = None
+    try:
+        if vial is not None:
+            mg_amount = float(getattr(vial, "mg_amount", None))
+    except Exception:
+        mg_amount = None
+
+    # Water ml stored as bacteriostatic_water_ml
+    try:
+        if water_ml_override:
+            water_ml = float(water_ml_override)
+        elif vial is not None:
+            water_ml = float(getattr(vial, "bacteriostatic_water_ml", None))
+    except Exception:
+        water_ml = None
+
+    # Compute
+    mg_per_ml = None
+    mcg_per_ml = None
+    expected_volume_ml = None
+    expected_units_u100 = None
+
+    if mg_amount and water_ml and water_ml > 0:
+        mg_per_ml = mg_amount / water_ml
+        mcg_per_ml = mg_per_ml * 1000.0
+
+    if dose_mcg and mcg_per_ml and mcg_per_ml > 0:
+        expected_volume_ml = dose_mcg / mcg_per_ml
+        # U-100 insulin syringes: 1.0 mL = 100 units
+        expected_units_u100 = expected_volume_ml * 100.0
+
+    return jsonify(
+        {
+            "protocol_id": int(protocol_id) if protocol_id.isdigit() else None,
+            "vial_id": int(vial_id) if vial_id.isdigit() else None,
+            "dose_mcg": dose_mcg,
+            "vial_mg_amount": mg_amount,
+            "water_ml": water_ml,
+            "mg_per_ml": mg_per_ml,
+            "mcg_per_ml": mcg_per_ml,
+            "expected_volume_ml": expected_volume_ml,
+            "expected_units_u100": expected_units_u100,
+        }
+    )
+
+
 def peptide_calculator():
     """
     Peptide Calculator:

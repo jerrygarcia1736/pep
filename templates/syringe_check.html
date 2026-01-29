@@ -1,0 +1,365 @@
+{% extends "base.html" %}
+
+{% block title %}Syringe Check - PeptideTracker.ai{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3">
+  <div style="font-size:28px">🧪</div>
+  <div>
+    <h1 class="mb-0">Syringe Check</h1>
+    <div class="text-muted small">Educational helper to sanity‑check BAC water + peptide draws against your vial + protocol.</div>
+  </div>
+</div>
+
+<div class="alert alert-warning">
+  <strong>Educational Tool Only:</strong> This tool helps you double‑check arithmetic and volume marks. It is not medical advice.
+</div>
+
+<ul class="nav nav-tabs" id="syringeTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" id="tab-dose" data-bs-toggle="tab" data-bs-target="#pane-dose" type="button" role="tab">
+      1mL Syringe — Dose Check
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="tab-bac" data-bs-toggle="tab" data-bs-target="#pane-bac" type="button" role="tab">
+      3mL Syringe — BAC Water Check
+    </button>
+  </li>
+</ul>
+
+<div class="tab-content pt-3">
+  <!-- Dose check -->
+  <div class="tab-pane fade show active" id="pane-dose" role="tabpanel">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-12 col-lg-6">
+            <label class="form-label fw-semibold">Protocol</label>
+            <select class="form-select" id="doseProtocol">
+              <option value="">Choose a protocol…</option>
+              {% for p in protocols %}
+                <option value="{{ p.id }}"
+                        data-peptide-id="{{ p.peptide.id if p.peptide else '' }}"
+                        data-dose-mcg="{{ p.dose_mcg }}">
+                  {{ p.name }} — {{ p.peptide.name if p.peptide else 'Peptide' }} ({{ p.dose_mcg }} mcg)
+                </option>
+              {% endfor %}
+            </select>
+            <div class="form-text">This pulls your expected mcg dose from the protocol (you can override below).</div>
+          </div>
+
+          <div class="col-12 col-lg-6">
+            <label class="form-label fw-semibold">Reconstituted Vial</label>
+            <select class="form-select" id="doseVial">
+              <option value="">Choose a vial…</option>
+              {% for v in vials %}
+                <option value="{{ v.id }}"
+                        data-peptide-id="{{ v.peptide.id if v.peptide else '' }}"
+                        data-mg="{{ v.mg_amount }}"
+                        data-water-ml="{{ v.bacteriostatic_water_ml }}">
+                  {{ v.peptide.name if v.peptide else 'Peptide' }} — {{ v.mg_amount }} mg {% if v.bacteriostatic_water_ml %}/ {{ v.bacteriostatic_water_ml }} mL{% else %}(no BAC mL saved){% endif %}
+                </option>
+              {% endfor %}
+            </select>
+            <div class="form-text">Needs BAC mL saved on the vial to compute concentration.</div>
+          </div>
+
+          <div class="col-12 col-lg-4">
+            <label class="form-label">Dose override (mcg)</label>
+            <input class="form-control" id="doseOverride" placeholder="Leave blank to use protocol dose">
+          </div>
+          <div class="col-12 col-lg-4">
+            <label class="form-label">Your drawn amount (Units on 1mL U‑100)</label>
+            <input class="form-control" id="drawnUnits" placeholder="Example: 12">
+            <div class="form-text">EasyTouch 1mL insulin syringes are usually U‑100 (100 units = 1.0 mL).</div>
+          </div>
+          <div class="col-12 col-lg-4">
+            <label class="form-label">Tolerance</label>
+            <select class="form-select" id="toleranceUnits">
+              <option value="0.5">±0.5 units</option>
+              <option value="1" selected>±1 unit</option>
+              <option value="2">±2 units</option>
+              <option value="5">±5 units</option>
+            </select>
+          </div>
+
+          <div class="col-12">
+            <button class="btn btn-primary" id="btnDoseCheck" type="button">
+              Verify dose draw
+            </button>
+          </div>
+        </div>
+
+        <hr>
+
+        <div id="doseResult" class="d-none">
+          <div class="row g-3">
+            <div class="col-12 col-lg-4">
+              <div class="p-3 border rounded-3 bg-light">
+                <div class="text-muted small">Expected volume</div>
+                <div class="fs-4 fw-semibold" id="expectedMl">—</div>
+                <div class="text-muted small">mL</div>
+              </div>
+            </div>
+            <div class="col-12 col-lg-4">
+              <div class="p-3 border rounded-3 bg-light">
+                <div class="text-muted small">Expected units (U‑100)</div>
+                <div class="fs-4 fw-semibold" id="expectedUnits">—</div>
+                <div class="text-muted small">units</div>
+              </div>
+            </div>
+            <div class="col-12 col-lg-4">
+              <div class="p-3 border rounded-3" id="doseVerdictBox">
+                <div class="text-muted small">Verdict</div>
+                <div class="fs-4 fw-semibold" id="doseVerdict">—</div>
+                <div class="text-muted small" id="doseVerdictHint"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-3 text-muted small" id="doseMath"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- BAC check -->
+  <div class="tab-pane fade" id="pane-bac" role="tabpanel">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-12 col-lg-6">
+            <label class="form-label fw-semibold">Vial you’re reconstituting</label>
+            <select class="form-select" id="bacVial">
+              <option value="">Choose a vial…</option>
+              {% for v in vials %}
+                <option value="{{ v.id }}"
+                        data-mg="{{ v.mg_amount }}"
+                        data-water-ml="{{ v.bacteriostatic_water_ml }}">
+                  {{ v.peptide.name if v.peptide else 'Peptide' }} — {{ v.mg_amount }} mg {% if v.bacteriostatic_water_ml %}/ {{ v.bacteriostatic_water_ml }} mL target{% endif %}
+                </option>
+              {% endfor %}
+            </select>
+            <div class="form-text">If you already saved BAC mL on the vial, we’ll use it as the target.</div>
+          </div>
+
+          <div class="col-12 col-lg-6">
+            <label class="form-label fw-semibold">Target BAC water (mL) override</label>
+            <input class="form-control" id="bacTargetOverride" placeholder="Leave blank to use vial target">
+            <div class="form-text">Example: 2.0 mL into a 3mL syringe.</div>
+          </div>
+
+          <div class="col-12 col-lg-4">
+            <label class="form-label">Your drawn BAC water (mL)</label>
+            <input class="form-control" id="bacDrawnMl" placeholder="Example: 2.0">
+          </div>
+
+          <div class="col-12 col-lg-4">
+            <label class="form-label">Tolerance</label>
+            <select class="form-select" id="bacTolerance">
+              <option value="0.05">±0.05 mL</option>
+              <option value="0.1" selected>±0.1 mL</option>
+              <option value="0.2">±0.2 mL</option>
+              <option value="0.5">±0.5 mL</option>
+            </select>
+          </div>
+
+          <div class="col-12 col-lg-4 d-flex align-items-end">
+            <button class="btn btn-primary w-100" id="btnBacCheck" type="button">
+              Verify BAC draw
+            </button>
+          </div>
+        </div>
+
+        <hr>
+
+        <div id="bacResult" class="d-none">
+          <div class="row g-3">
+            <div class="col-12 col-lg-4">
+              <div class="p-3 border rounded-3 bg-light">
+                <div class="text-muted small">Target BAC water</div>
+                <div class="fs-4 fw-semibold" id="bacTarget">—</div>
+                <div class="text-muted small">mL</div>
+              </div>
+            </div>
+            <div class="col-12 col-lg-4">
+              <div class="p-3 border rounded-3 bg-light">
+                <div class="text-muted small">Your drawn amount</div>
+                <div class="fs-4 fw-semibold" id="bacDrawn">—</div>
+                <div class="text-muted small">mL</div>
+              </div>
+            </div>
+            <div class="col-12 col-lg-4">
+              <div class="p-3 border rounded-3" id="bacVerdictBox">
+                <div class="text-muted small">Verdict</div>
+                <div class="fs-4 fw-semibold" id="bacVerdict">—</div>
+                <div class="text-muted small" id="bacVerdictHint"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-3 text-muted small">
+          Tip: This check is especially helpful before mixing — it reduces “oops” moments.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(async function(){
+  function round(n, d){ 
+    if(n === null || n === undefined || Number.isNaN(n)) return null;
+    const p = Math.pow(10,d); 
+    return Math.round(n*p)/p; 
+  }
+
+  async function fetchExpected(params){
+    const qs = new URLSearchParams(params);
+    const res = await fetch('/api/syringe-check/expected?' + qs.toString());
+    return await res.json();
+  }
+
+  // --- Dose check ---
+  const doseProtocol = document.getElementById('doseProtocol');
+  const doseVial = document.getElementById('doseVial');
+  const doseOverride = document.getElementById('doseOverride');
+  const drawnUnits = document.getElementById('drawnUnits');
+  const toleranceUnits = document.getElementById('toleranceUnits');
+  const btnDoseCheck = document.getElementById('btnDoseCheck');
+
+  const doseResult = document.getElementById('doseResult');
+  const expectedMl = document.getElementById('expectedMl');
+  const expectedUnits = document.getElementById('expectedUnits');
+  const doseVerdict = document.getElementById('doseVerdict');
+  const doseVerdictHint = document.getElementById('doseVerdictHint');
+  const doseVerdictBox = document.getElementById('doseVerdictBox');
+  const doseMath = document.getElementById('doseMath');
+
+  function verdictBox(el, ok){
+    el.classList.remove('bg-light','bg-success','bg-danger','text-white','border-success','border-danger');
+    if(ok){
+      el.classList.add('bg-success','text-white','border-success');
+    }else{
+      el.classList.add('bg-danger','text-white','border-danger');
+    }
+  }
+
+  if(btnDoseCheck){
+    btnDoseCheck.addEventListener('click', async () => {
+      const protocol_id = doseProtocol.value;
+      const vial_id = doseVial.value;
+      const dose_mcg = (doseOverride.value || '').trim();
+      const drawn = parseFloat(drawnUnits.value || '');
+      const tol = parseFloat(toleranceUnits.value);
+
+      if(!protocol_id && !dose_mcg){
+        alert("Pick a protocol or enter a dose override (mcg).");
+        return;
+      }
+      if(!vial_id){
+        alert("Pick a vial (needs BAC mL saved to compute concentration).");
+        return;
+      }
+      if(Number.isNaN(drawn)){
+        alert("Enter the units you drew into the 1mL U-100 syringe.");
+        return;
+      }
+
+      const data = await fetchExpected({ protocol_id, vial_id, dose_mcg });
+
+      doseResult.classList.remove('d-none');
+
+      const expMl = data.expected_volume_ml;
+      const expUnits = data.expected_units_u100;
+
+      if(expMl === null || expUnits === null){
+        expectedMl.textContent = "—";
+        expectedUnits.textContent = "—";
+        doseVerdict.textContent = "Needs vial BAC mL";
+        doseVerdictHint.textContent = "Make sure the vial has BAC water mL saved (reconstituted).";
+        verdictBox(doseVerdictBox, false);
+        doseMath.textContent = "";
+        return;
+      }
+
+      expectedMl.textContent = String(round(expMl, 3));
+      expectedUnits.textContent = String(round(expUnits, 1));
+
+      const diff = Math.abs(drawn - expUnits);
+      const ok = diff <= tol;
+
+      doseVerdict.textContent = ok ? "Looks right" : "Mismatch";
+      doseVerdictHint.textContent = ok
+        ? `Within ±${tol} units tolerance.`
+        : `Off by ~${round(diff, 1)} units (tolerance ±${tol}). Double-check plunger line.`;
+
+      verdictBox(doseVerdictBox, ok);
+
+      const mg_per_ml = data.mg_per_ml;
+      const mcg_per_ml = data.mcg_per_ml;
+      doseMath.textContent = `Math: ${round(mg_per_ml, 2)} mg/mL (${round(mcg_per_ml, 0)} mcg/mL). Expected volume = dose / concentration.`;
+    });
+  }
+
+  // --- BAC check ---
+  const bacVial = document.getElementById('bacVial');
+  const bacTargetOverride = document.getElementById('bacTargetOverride');
+  const bacDrawnMl = document.getElementById('bacDrawnMl');
+  const bacTolerance = document.getElementById('bacTolerance');
+  const btnBacCheck = document.getElementById('btnBacCheck');
+
+  const bacResult = document.getElementById('bacResult');
+  const bacTarget = document.getElementById('bacTarget');
+  const bacDrawn = document.getElementById('bacDrawn');
+  const bacVerdict = document.getElementById('bacVerdict');
+  const bacVerdictHint = document.getElementById('bacVerdictHint');
+  const bacVerdictBox = document.getElementById('bacVerdictBox');
+
+  if(btnBacCheck){
+    btnBacCheck.addEventListener('click', async () => {
+      const vial_id = bacVial.value;
+      const water_ml = (bacTargetOverride.value || '').trim();
+      const drawn = parseFloat(bacDrawnMl.value || '');
+      const tol = parseFloat(bacTolerance.value);
+
+      if(!vial_id && !water_ml){
+        alert("Pick a vial (to use its saved BAC target) or enter a target BAC mL override.");
+        return;
+      }
+      if(Number.isNaN(drawn)){
+        alert("Enter how many mL you drew into the 3mL syringe.");
+        return;
+      }
+
+      const data = await fetchExpected({ vial_id, water_ml });
+
+      const target = data.water_ml;
+      if(target === null){
+        alert("No BAC target available. Enter a target BAC mL override.");
+        return;
+      }
+
+      bacResult.classList.remove('d-none');
+      bacTarget.textContent = String(round(target, 2));
+      bacDrawn.textContent = String(round(drawn, 2));
+
+      const diff = Math.abs(drawn - target);
+      const ok = diff <= tol;
+
+      bacVerdict.textContent = ok ? "Looks right" : "Mismatch";
+      bacVerdictHint.textContent = ok
+        ? `Within ±${tol} mL tolerance.`
+        : `Off by ~${round(diff, 2)} mL (tolerance ±${tol}). Re-check the meniscus/plunger line.`;
+
+      verdictBox(bacVerdictBox, ok);
+    });
+  }
+})();
+</script>
+{% endblock %}
