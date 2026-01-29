@@ -213,14 +213,23 @@ def inject_template_helpers():
         return name in app.view_functions
 
     if not user:
-        return {"current_user": AnonymousUser(), "has_endpoint": has_endpoint, "tier_at_least": tier_at_least, "pep_ai_remaining": (lambda: None)}
+        # Not logged in
+        return {
+            "current_user": AnonymousUser(),
+            "has_endpoint": has_endpoint,
+            "tier_at_least": tier_at_least,
+            "pep_ai_remaining": (lambda: None),
+        }
 
+    # Logged in
     user.is_authenticated = True
-    if
+    if not getattr(user, "tier", None):
+        user.tier = "free"
+
     def pep_ai_remaining() -> int | None:
-        """Returns remaining free Pep AI uses for the current user.
+        """Remaining free Pep AI uses for current user.
         - None means unlimited (tier1+)
-        - 0+ is remaining uses for free tier
+        - 0+ means remaining free uses for free tier
         """
         try:
             if tier_at_least(user.tier, "tier1"):
@@ -235,10 +244,12 @@ def inject_template_helpers():
         except Exception:
             return None
 
-     not getattr(user, "tier", None):
-        user.tier = "free"
-
-    return {"current_user": user, "has_endpoint": has_endpoint, "tier_at_least": tier_at_least, "pep_ai_remaining": pep_ai_remaining}
+    return {
+        "current_user": user,
+        "has_endpoint": has_endpoint,
+        "tier_at_least": tier_at_least,
+        "pep_ai_remaining": pep_ai_remaining,
+    }
 
 # -----------------------------------------------------------------------------
 # Utility: render template if it exists
