@@ -46,7 +46,6 @@ class User(ModelBase):
     password_hash = Column(String(255), nullable=False)
     tier = Column(String(20), nullable=False, default="free")  # free | tier1 | tier2 | admin
     created_at = Column(DateTime, default=datetime.utcnow)
-    agreement_accepted_at = Column(DateTime, nullable=True)  # NULL = not accepted yet
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
@@ -106,26 +105,8 @@ def ensure_users_tier_column(engine) -> None:
     except Exception as e:
         print(f"Warning: could not ensure users.tier column: {e}")
 
-def ensure_users_agreement_column(engine) -> None:
-    """Add users.agreement_accepted_at on legacy DBs (safe no-op if already present)."""
-    try:
-        dialect = (engine.dialect.name or "").lower()
-        if dialect.startswith("postgres"):
-            with engine.begin() as conn:
-                conn.execute(
-                    text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS agreement_accepted_at TIMESTAMP NULL;")
-                )
-        elif dialect.startswith("sqlite"):
-            with engine.begin() as conn:
-                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(users);")).fetchall()]
-                if "agreement_accepted_at" not in cols:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN agreement_accepted_at TIMESTAMP NULL;"))
-    except Exception as e:
-        print(f"Warning: could not ensure users.agreement_accepted_at column: {e}")
-
 ModelBase.metadata.create_all(engine)
 ensure_users_tier_column(engine)
-ensure_users_agreement_column(engine)
 
 # -----------------------------------------------------------------------------
 # Register USDA Nutrition API Routes
@@ -149,20 +130,6 @@ def login_required(f):
         if "user_id" not in session:
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
-        
-        # Check if user has accepted agreement (only if column exists)
-        db = get_session(db_url)
-        try:
-            user = db.query(User).filter_by(id=session["user_id"]).first()
-            # Try to check agreement, but don't fail if column doesn't exist yet
-            try:
-                if user and hasattr(user, 'agreement_accepted_at') and not user.agreement_accepted_at:
-                    return redirect(url_for("user_agreement"))
-            except:
-                pass  # Column doesn't exist yet, skip check
-        finally:
-            db.close()
-        
         return f(*args, **kwargs)
     return wrapper
 
@@ -437,37 +404,6 @@ def terms_of_service():
 def medical_disclaimer():
     """Medical Disclaimer page"""
     return render_if_exists("medical_disclaimer.html", fallback_endpoint="dashboard")
-
-
-@app.route("/user-agreement")
-@login_required
-def user_agreement():
-    """User agreement that must be accepted before using the app"""
-    # Don't check for agreement in this route (would cause infinite loop)
-    return render_template("user_agreement.html")
-
-
-@app.route("/accept-agreement", methods=["POST"])
-def accept_agreement():
-    """Process user agreement acceptance"""
-    if "user_id" not in session:
-        flash("Please log in.", "warning")
-        return redirect(url_for("login"))
-    
-    db = get_session(db_url)
-    try:
-        user = db.query(User).filter_by(id=session["user_id"]).first()
-        if user:
-            # Mark agreement as accepted with timestamp
-            user.agreement_accepted_at = datetime.utcnow()
-            db.commit()
-            flash("Agreement accepted. Welcome to PeptideTracker.ai!", "success")
-            return redirect(url_for("dashboard"))
-    finally:
-        db.close()
-    
-    flash("Error processing agreement.", "error")
-    return redirect(url_for("user_agreement"))
 
 # -----------------------------------------------------------------------------
 # Stub endpoints to prevent BuildError
