@@ -1,121 +1,140 @@
 {% extends "base.html" %}
-
-{% block title %}Welcome - Peptide Tracker{% endblock %}
+{% block title %}Welcome - PeptideTracker.ai{% endblock %}
 
 {% block content %}
-<div class="row align-items-center" style="min-height: 70vh;">
-    <div class="col-lg-6">
+<div class="container-xxl">
+  <div class="row g-5 align-items-start">
+    <div class="col-12 col-lg-7">
+      <h1 class="display-4 fw-bold lh-1 mb-3">
+        Maximize your years by<br>
+        making safer, more<br>
+        informed decisions about<br>
+        peptides and long-term<br>
+        health — without hype,<br>
+        myths, or medical claims.
+      </h1>
+      <p class="text-muted fs-5 mb-4">
+        Built to prioritize education, clarity, and safety in a space full of noise and misinformation.
+      </p>
 
-        <!-- HERO -->
-        <h1 class="display-5 fw-bold mb-4">
-            Maximize your years by making safer, more informed decisions about peptides and long-term health —
-            without hype, myths, or medical claims.
-        </h1>
+      <div class="d-flex flex-wrap gap-2 mb-4">
+        {% if has_endpoint('register') %}
+          <a class="btn btn-primary btn-lg" href="{{ url_for('register') }}">Get started</a>
+        {% else %}
+          <a class="btn btn-primary btn-lg" href="/register">Get started</a>
+        {% endif %}
 
-        <p class="lead mb-4 text-muted">
-            Built to prioritize education, clarity, and safety in a space full of noise and misinformation.
-        </p>
+        {% if has_endpoint('login') %}
+          <a class="btn btn-outline-primary btn-lg" href="{{ url_for('login') }}">Log in</a>
+        {% else %}
+          <a class="btn btn-outline-primary btn-lg" href="/login">Log in</a>
+        {% endif %}
+      </div>
 
-        <!-- FEATURE CARDS -->
-        <div class="row g-3 mb-4">
-            <div class="col-md-6">
-                <div class="card border-primary">
-                    <div class="card-body">
-                        <i class="bi bi-calculator fs-1 text-primary"></i>
-                        <h5 class="card-title mt-2">Smart Calculator</h5>
-                        <p class="card-text small">Precise reconstitution calculations</p>
-                    </div>
+      <div class="row g-3">
+        <div class="col-12 col-md-6">
+          <div class="card h-100 shadow-sm border-0">
+            <div class="card-body">
+              <div class="d-flex align-items-center gap-3 mb-2">
+                <div class="rounded-3 p-2 bg-primary bg-opacity-10 text-primary" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;">
+                  <i class="bi bi-calculator fs-4"></i>
                 </div>
+                <div class="fw-semibold fs-5">Smart Calculator</div>
+              </div>
+              <div class="text-muted">Precise reconstitution calculations</div>
             </div>
-            <div class="col-md-6">
-                <div class="card border-success">
-                    <div class="card-body">
-                        <i class="bi bi-graph-up fs-1 text-success"></i>
-                        <h5 class="card-title mt-2">Track Progress</h5>
-                        <p class="card-text small">Monitor protocols and injections</p>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card border-info">
-                    <div class="card-body">
-                        <i class="bi bi-database fs-1 text-info"></i>
-                        <h5 class="card-title mt-2">Peptide Database</h5>
-                        <p class="card-text small">10+ common peptides pre-loaded</p>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card border-warning">
-                    <div class="card-body">
-                        <i class="bi bi-shield-check fs-1 text-warning"></i>
-                        <h5 class="card-title mt-2">Secure & Private</h5>
-                        <p class="card-text small">Your data stays private</p>
-                    </div>
-                </div>
-            </div>
+          </div>
         </div>
 
-        <!-- CTA -->
-        <div class="d-grid gap-2 d-md-flex">
-            <a href="{{ url_for('register') }}" class="btn btn-primary btn-lg px-4">
-                Explore peptides safely
-            </a>
-            <a href="{{ url_for('login') }}" class="btn btn-outline-secondary btn-lg px-4">
-                Login
-            </a>
+        <div class="col-12 col-md-6">
+          <div class="card h-100 shadow-sm border-0">
+            <div class="card-body">
+              <div class="d-flex align-items-center gap-3 mb-2">
+                <div class="rounded-3 p-2 bg-success bg-opacity-10 text-success" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;">
+                  <i class="bi bi-graph-up fs-4"></i>
+                </div>
+                <div class="fw-semibold fs-5">Track Progress</div>
+              </div>
+              <div class="text-muted">Monitor protocols and injections</div>
+            </div>
+          </div>
         </div>
+
+        <div class="col-12 col-md-6">
+          <div class="card h-100 shadow-sm border-0">
+            <div class="card-body">
+              <div class="d-flex align-items-center gap-3 mb-2">
+                <div class="rounded-3 p-2 bg-info bg-opacity-10 text-info" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;">
+                  <i class="bi bi-upc-scan fs-4"></i>
+                </div>
+                <div class="fw-semibold fs-5">Scan tools</div>
+              </div>
+              <div class="text-muted">Scan peptide labels & nutrition</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12 col-md-6">
+          <div class="card h-100 shadow-sm border-0">
+            <div class="card-body">
+              <div class="d-flex align-items-center gap-3 mb-2">
+                <div class="rounded-3 p-2 bg-warning bg-opacity-10 text-warning" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;">
+                  <i class="bi bi-clipboard2-check fs-4"></i>
+                </div>
+                <div class="fw-semibold fs-5">Protocols</div>
+              </div>
+              <div class="text-muted">Build schedules and cycles</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <!-- RIGHT SIDE FEATURES -->
-    <div class="col-lg-6">
-        <div class="card shadow-lg">
-            <div class="card-body p-5">
-                <h3 class="mb-4">Features</h3>
-                <ul class="list-unstyled">
-                    <li class="mb-3">
-                        <i class="bi bi-check-circle-fill text-success me-2"></i>
-                        <strong>Reconstitution Calculator</strong> - Calculate concentrations and dosages
-                    </li>
-                    <li class="mb-3">
-                        <i class="bi bi-check-circle-fill text-success me-2"></i>
-                        <strong>Vial Management</strong> - Track inventory and expiration dates
-                    </li>
-                    <li class="mb-3">
-                        <i class="bi bi-check-circle-fill text-success me-2"></i>
-                        <strong>Protocol Creation</strong> - Define dosing schedules and cycles
-                    </li>
-                    <li class="mb-3">
-                        <i class="bi bi-check-circle-fill text-success me-2"></i>
-                        <strong>Injection Logging</strong> - Record each injection with notes
-                    </li>
-                    <li class="mb-3">
-                        <i class="bi bi-check-circle-fill text-success me-2"></i>
-                        <strong>Research Database</strong> - Store studies and notes
-                    </li>
-                    <li class="mb-3">
-                        <i class="bi bi-check-circle-fill text-success me-2"></i>
-                        <strong>Progress Tracking</strong> - Monitor your protocols over time
-                    </li>
-                </ul>
+    <div class="col-12 col-lg-5">
+      <div class="card shadow-sm border-0">
+        <div class="card-body p-4">
+          <h3 class="fw-bold mb-3">Features</h3>
 
-                <div class="alert alert-info mt-4">
-                    <i class="bi bi-info-circle me-2"></i>
-                    <strong>Free to start!</strong> Track up to 2 peptides and create unlimited protocols.
-                </div>
+          <div class="d-flex flex-column gap-3">
+            <div class="d-flex gap-3">
+              <i class="bi bi-check-circle-fill text-success fs-5"></i>
+              <div><span class="fw-semibold">Reconstitution Calculator</span> - Calculate concentrations and dosages</div>
             </div>
-        </div>
-    </div>
-</div>
+            <div class="d-flex gap-3">
+              <i class="bi bi-check-circle-fill text-success fs-5"></i>
+              <div><span class="fw-semibold">Vial Management</span> - Track inventory and expiration dates</div>
+            </div>
+            <div class="d-flex gap-3">
+              <i class="bi bi-check-circle-fill text-success fs-5"></i>
+              <div><span class="fw-semibold">Protocol Creation</span> - Define dosing schedules and cycles</div>
+            </div>
+            <div class="d-flex gap-3">
+              <i class="bi bi-check-circle-fill text-success fs-5"></i>
+              <div><span class="fw-semibold">Injection Logging</span> - Record each injection with notes</div>
+            </div>
+            <div class="d-flex gap-3">
+              <i class="bi bi-check-circle-fill text-success fs-5"></i>
+              <div><span class="fw-semibold">Research Database</span> - Store studies and notes</div>
+            </div>
+            <div class="d-flex gap-3">
+              <i class="bi bi-check-circle-fill text-success fs-5"></i>
+              <div><span class="fw-semibold">Progress Tracking</span> - Monitor your protocols over time</div>
+            </div>
+          </div>
 
-<!-- DISCLAIMER -->
-<div class="row mt-5">
-    <div class="col-12">
-        <div class="alert alert-warning">
-            <i class="bi bi-exclamation-triangle me-2"></i>
-            <strong>Disclaimer:</strong> This tool is for informational and organizational purposes only.
-            Not medical advice. Consult healthcare professionals before using any peptides.
+          <div class="alert alert-info mt-4 mb-0">
+            <div class="d-flex gap-2 align-items-start">
+              <i class="bi bi-info-circle"></i>
+              <div>
+                <div class="fw-semibold">Free to start!</div>
+                <div>Track up to 2 peptides and create unlimited protocols.</div>
+              </div>
+            </div>
+          </div>
+
         </div>
+      </div>
     </div>
+  </div>
 </div>
 {% endblock %}
