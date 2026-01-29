@@ -27,6 +27,8 @@ from models import get_session, create_engine, Base as ModelBase
 
 # Import nutrition API
 from nutrition_api import register_nutrition_routes
+from confidence import compute_injection_confidence
+
 
 # -----------------------------------------------------------------------------
 # Flask app
@@ -2384,3 +2386,27 @@ if __name__ == "__main__":
 
 
 FREE_TRIAL_LIMIT = 10  # free tier Pep AI messages
+
+
+# -----------------------------------------------------------------------------
+# Confidence Score API (data-alignment + verification confidence)
+# -----------------------------------------------------------------------------
+@app.route("/api/injection-confidence", methods=["POST"])
+@login_required
+def api_injection_confidence():
+    """
+    POST JSON payload (see confidence.compute_injection_confidence docstring).
+    Returns: {score, band, reasons}
+    """
+    try:
+        payload = request.get_json(force=True) or {}
+    except Exception:
+        payload = {}
+
+    result = compute_injection_confidence(payload)
+    # Do NOT return debug by default in production; keep for now for tuning.
+    include_debug = bool(request.args.get("debug"))
+    if not include_debug and "debug" in result:
+        result.pop("debug", None)
+    return jsonify(result)
+
