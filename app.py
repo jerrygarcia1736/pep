@@ -1891,17 +1891,140 @@ def chat():
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
-def _pep_ai_system_prompt() -> str:
-    return (
-        "You are Pep AI inside PeptideTracker.ai. "
-        "You provide educational, research-oriented information only. "
-        "No medical advice, diagnosis, treatment recommendations, or dosing instructions. "
-        "If the user asks for dosing, prescriptions, or medical decisions, refuse and suggest they consult a licensed clinician. "
-        "You can help with math (e.g., reconstitution concentration calculations) and summarize study abstracts at a high level. "
-        "Always encourage safety, verification, and professional guidance."
-    )
+def _pep_ai_system_prompt(user_context: dict = None) -> str:
+    """
+    Generate intelligent system prompt with user context.
+    Features 2-5: Context-aware, Protocol-aware, Progress tracking, Smart recommendations
+    """
+    
+    base_prompt = """You are Pep AI, an intelligent research assistant for PeptideTracker.ai.
 
-def _call_openai_chat(message: str) -> str:
+CRITICAL LEGAL BOUNDARIES - NEVER VIOLATE:
+1. You are NOT a doctor, nurse, or licensed healthcare provider
+2. You do NOT provide medical advice, diagnosis, or treatment
+3. You do NOT recommend specific doses for individual users
+4. You ALWAYS direct users to consult healthcare providers for medical decisions
+
+WHAT YOU CAN DO (Educational + Intelligent):
+✓ Explain how peptides work (mechanisms of action)
+✓ Summarize published research studies
+✓ Provide general dosing ranges from research literature
+✓ Compare peptides based on research data
+✓ Help users understand scientific concepts
+✓ Calculate math (reconstitution, concentrations)
+✓ Use user profile, protocols, and tracking data to filter relevant education
+✓ Provide progress insights based on their tracking
+✓ Suggest research-backed next steps (NOT medical prescriptions)
+
+WHAT YOU CANNOT DO:
+✗ Say "You should take X dose" or "I recommend X mcg for you"
+✗ Say "This will cure/treat/fix your condition"
+✗ Interpret symptoms medically or diagnose
+✗ Tell them to start/stop protocols without provider consultation
+✗ Make medical decisions"""
+
+    # Add comprehensive user context if available
+    if user_context:
+        context_section = "\n\n═══ USER CONTEXT (for intelligent personalization) ═══\n"
+        
+        # FEATURE 2: Profile Context
+        if user_context.get("profile"):
+            profile = user_context["profile"]
+            goals_display = ', '.join(profile.get('goals', []))
+            context_section += f"""
+📊 PROFILE:
+• Age: {profile.get('age')} years | Weight: {profile.get('weight_lbs')} lbs | Height: {profile.get('height_inches')}" 
+• Gender: {profile.get('gender')} | Experience: {profile.get('experience_level')}
+• Primary Goals: {goals_display}"""
+        
+        # FEATURE 3: Active Protocols (if available)
+        if user_context.get("active_protocols"):
+            protocols = user_context["active_protocols"]
+            context_section += f"\n\n💉 ACTIVE PROTOCOLS:"
+            for p in protocols:
+                context_section += f"\n• {p['name']}: {p['dose']} {p['frequency']}"
+                if p.get('start_date'):
+                    context_section += f" (Day {p['days_active']})"
+        
+        # FEATURE 4: Recent Progress (if available)
+        if user_context.get("recent_injections"):
+            inj_count = user_context["recent_injections"]["total"]
+            compliance = user_context["recent_injections"]["compliance_rate"]
+            context_section += f"\n\n📈 RECENT ACTIVITY (last 7 days):"
+            context_section += f"\n• Injections logged: {inj_count}"
+            context_section += f"\n• Compliance rate: {compliance}%"
+            if compliance < 70:
+                context_section += " (⚠️ below target)"
+            elif compliance > 90:
+                context_section += " (✓ excellent!)"
+        
+        # FEATURE 5: Smart Insights (if available)
+        if user_context.get("insights"):
+            insights = user_context["insights"]
+            context_section += f"\n\n💡 INSIGHTS:"
+            for insight in insights:
+                context_section += f"\n• {insight}"
+        
+        context_section += "\n\n═══ HOW TO USE THIS CONTEXT ═══"
+        context_section += """
+
+PERSONALIZATION RULES:
+1. **Goal Alignment**: Filter all education through their specific goals
+   - If goals include "recovery" → emphasize tissue repair research
+   - If goals include "fat_loss" → focus on metabolic peptides
+   - If goals include "muscle_gain" → highlight anabolic effects
+
+2. **Experience-Based Complexity**:
+   - Beginner: Simpler explanations, more safety emphasis
+   - Intermediate: Balanced detail, practical applications
+   - Advanced: Technical depth, research citations
+
+3. **Protocol Awareness** (CRITICAL):
+   - Check for interactions with current protocols
+   - Don't suggest peptides that conflict with active ones
+   - Acknowledge what they're already doing: "I see you're using TB-500..."
+
+4. **Progress Recognition**:
+   - Acknowledge their compliance: "Your 95% adherence is excellent..."
+   - Reference tracking: "Based on your X injections this month..."
+   - Celebrate milestones: "You're on day 28 of your protocol..."
+
+5. **Smart Suggestions**:
+   - Cycle completion: "Your 6-week TB-500 cycle ends in 3 days. Research suggests..."
+   - Stacking opportunities: "Given your recovery goals and current BPC-157, research shows TB-500 pairs well..."
+   - Progression: "At intermediate level with 3 months experience, you might explore..."
+
+RESPONSE FRAMEWORK:
+
+When asked about dosing:
+"Research shows [peptide] at [range]. Given your [profile factor], typical dosing in studies is [specific range]. Your healthcare provider can determine the appropriate dose for your situation."
+
+When suggesting next steps:
+"Based on your [goal] goals and [current protocol], research shows [peptide] is commonly explored next. Studies suggest [benefits]. Discuss with your provider whether this aligns with your health plan."
+
+When acknowledging progress:
+"I see you've logged [X injections] with [Y%] compliance - that's [assessment]! Research indicates [relevant finding for their stage]."
+
+NEVER say: "You should do X"
+ALWAYS say: "Research shows X. Discuss with your provider if Y fits your situation."
+"""
+
+        base_prompt += context_section
+
+    # Add mandatory disclaimer
+    base_prompt += """
+
+═══ MANDATORY DISCLAIMER ═══
+Include at end of ANY response about peptides/protocols/dosing:
+
+---
+⚠️ This is educational information from research literature, not medical advice. Always consult your healthcare provider before starting, stopping, or modifying any peptide protocol.
+
+TONE: Intelligent, supportive, educational, safety-conscious. Like a knowledgeable research assistant who knows their data."""
+
+    return base_prompt
+
+def _call_openai_chat(message: str, user_context: dict = None) -> str:
     if not OPENAI_API_KEY:
         return "Pep AI is not configured yet (missing OPENAI_API_KEY). Please contact support."
 
@@ -1913,15 +2036,15 @@ def _call_openai_chat(message: str) -> str:
     payload = {
         "model": OPENAI_MODEL,
         "messages": [
-            {"role": "system", "content": _pep_ai_system_prompt()},
+            {"role": "system", "content": _pep_ai_system_prompt(user_context)},
             {"role": "user", "content": message},
         ],
         "temperature": 0.4,
-        "max_tokens": 500,
+        "max_tokens": 1000,  # Increased for richer, context-aware responses
     }
 
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=25)
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
         if resp.status_code == 401:
             return "Pep AI configuration error: invalid OpenAI key."
         if resp.status_code >= 400:
@@ -1933,6 +2056,100 @@ def _call_openai_chat(message: str) -> str:
     except Exception as e:
         print(f"Pep AI exception: {e}")
         return "Pep AI encountered an error. Please try again."
+
+def _build_comprehensive_user_context(user_id: int, db) -> dict:
+    """
+    Build comprehensive context about user for intelligent AI responses.
+    Features 2-5: Profile, Protocols, Progress, Smart Insights
+    """
+    context = {}
+    
+    # FEATURE 2: User Profile
+    try:
+        profile = db.query(UserProfile).filter_by(user_id=user_id).first()
+        if profile and profile.completed_at:
+            context["profile"] = {
+                "age": profile.age,
+                "weight_lbs": profile.weight_lbs,
+                "height_inches": profile.height_inches,
+                "gender": profile.gender,
+                "goals": json.loads(profile.goals) if profile.goals else [],
+                "experience_level": profile.experience_level
+            }
+    except Exception as e:
+        print(f"Error loading profile: {e}")
+    
+    # FEATURE 3: Active Protocols (placeholder - adapt if you have Protocol model)
+    try:
+        # If you have a Protocol/PeptideProtocol model, load it here
+        # For now, this is a placeholder structure showing what to track
+        # protocols = db.query(Protocol).filter_by(user_id=user_id, active=True).all()
+        # if protocols:
+        #     context["active_protocols"] = [
+        #         {
+        #             "name": p.peptide_name,
+        #             "dose": p.dose_amount,
+        #             "frequency": p.frequency,
+        #             "start_date": p.start_date,
+        #             "days_active": (datetime.utcnow() - p.start_date).days
+        #         }
+        #         for p in protocols
+        #     ]
+        pass
+    except Exception as e:
+        print(f"Error loading protocols: {e}")
+    
+    # FEATURE 4: Recent Progress & Compliance
+    try:
+        # If you have Injection tracking model
+        # from datetime import timedelta
+        # week_ago = datetime.utcnow() - timedelta(days=7)
+        # recent_injections = db.query(Injection).filter(
+        #     Injection.user_id == user_id,
+        #     Injection.date >= week_ago
+        # ).count()
+        # 
+        # if recent_injections > 0:
+        #     # Calculate expected vs actual
+        #     # expected = active_protocols * frequency * 7
+        #     # compliance = (recent_injections / expected) * 100
+        #     context["recent_injections"] = {
+        #         "total": recent_injections,
+        #         "compliance_rate": 85  # Calculate based on schedule
+        #     }
+        pass
+    except Exception as e:
+        print(f"Error loading injection history: {e}")
+    
+    # FEATURE 5: Smart Insights
+    try:
+        insights = []
+        
+        # Example insights based on data:
+        # if context.get("recent_injections"):
+        #     compliance = context["recent_injections"]["compliance_rate"]
+        #     if compliance > 90:
+        #         insights.append("Excellent compliance this week!")
+        #     elif compliance < 70:
+        #         insights.append("Compliance dropped - check reminders?")
+        
+        # if context.get("active_protocols"):
+        #     for protocol in context["active_protocols"]:
+        #         if protocol["days_active"] >= 40:
+        #             insights.append(f"{protocol['name']} protocol nearing completion (typical 6-8 week cycle)")
+        
+        # if context.get("profile"):
+        #     goals = context["profile"]["goals"]
+        #     if "recovery" in goals and not context.get("active_protocols"):
+        #         insights.append("No active recovery protocols - explore BPC-157 or TB-500 research")
+        
+        if insights:
+            context["insights"] = insights
+            
+    except Exception as e:
+        print(f"Error generating insights: {e}")
+    
+    return context
 
 @app.route("/api/chat", methods=["POST"])
 @login_required
@@ -1970,7 +2187,11 @@ def api_chat():
             db.commit()
             remaining = max(FREE_PEP_AI_LIMIT - usage.used, 0)
 
-        reply = _call_openai_chat(message)
+        # Build comprehensive user context (Features 2-5)
+        user_context = _build_comprehensive_user_context(user.id, db)
+        
+        # Call AI with full context for intelligent responses
+        reply = _call_openai_chat(message, user_context)
 
         resp = {"reply": reply}
         if remaining is not None:
