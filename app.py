@@ -1824,6 +1824,35 @@ def syringe_check():
     )
 
 
+
+@app.route("/syringe-check/camera")
+@login_required
+def syringe_check_camera():
+    """Camera-assisted syringe measurement (client-side calibration)."""
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
+            vials = getattr(pdb, "list_active_vials", lambda: [])()
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocols/vials for syringe camera check")
+        protocols, vials = [], []
+
+    return render_if_exists(
+        "syringe_check_camera.html",
+        fallback_endpoint="syringe_check",
+        protocols=protocols,
+        vials=vials,
+        title="Syringe Camera Check",
+    )
+
+
+
+
 @app.route("/api/syringe-check/expected")
 @login_required
 def api_syringe_check_expected():

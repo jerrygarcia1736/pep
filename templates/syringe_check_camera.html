@@ -1,0 +1,508 @@
+{% extends "base.html" %}
+
+{% block title %}Syringe Camera Check - PeptideTracker.ai{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+  <div class="d-flex align-items-center gap-2">
+    <div style="font-size:28px">📷</div>
+    <div>
+      <h1 class="mb-0">Syringe Camera Check</h1>
+      <div class="text-muted small">Calibrate two marks, then tap the plunger line to measure volume/units.</div>
+    </div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="/syringe-check">
+    <i class="bi bi-arrow-left"></i> Back
+  </a>
+</div>
+
+<div class="alert alert-warning">
+  <strong>Educational Tool Only:</strong> This is a visual measurement helper. Lighting, angle, and syringe brand can cause error.
+  Always follow your clinician/pharmacy instructions.
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-5">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white fw-semibold">1) Choose what you’re measuring</div>
+      <div class="card-body">
+        <label class="form-label">Mode</label>
+        <select class="form-select" id="modeSelect">
+          <option value="dose" selected>1mL U-100 (Dose draw)</option>
+          <option value="bac">3mL (BAC water draw)</option>
+        </select>
+
+        <div class="mt-3" id="doseConfig">
+          <label class="form-label fw-semibold">Protocol</label>
+          <select class="form-select" id="protocolSel">
+            <option value="">Choose a protocol…</option>
+            {% for p in protocols %}
+              <option value="{{ p.id }}" data-dose="{{ p.dose_mcg }}">{{ p.name }} — {{ p.peptide.name if p.peptide else 'Peptide' }} ({{ p.dose_mcg }} mcg)</option>
+            {% endfor %}
+          </select>
+
+          <label class="form-label fw-semibold mt-3">Vial</label>
+          <select class="form-select" id="vialSelDose">
+            <option value="">Choose a vial…</option>
+            {% for v in vials %}
+              <option value="{{ v.id }}">{{ v.peptide.name if v.peptide else 'Peptide' }} — {{ v.mg_amount }} mg {% if v.bacteriostatic_water_ml %}/ {{ v.bacteriostatic_water_ml }} mL{% endif %}</option>
+            {% endfor %}
+          </select>
+
+          <div class="row g-2 mt-2">
+            <div class="col-6">
+              <label class="form-label">Dose override (mcg)</label>
+              <input class="form-control" id="doseOverride" placeholder="optional">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Tolerance (units)</label>
+              <select class="form-select" id="tolUnits">
+                <option value="0.5">±0.5</option>
+                <option value="1" selected>±1</option>
+                <option value="2">±2</option>
+                <option value="5">±5</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-3 d-none" id="bacConfig">
+          <label class="form-label fw-semibold">Vial (optional target)</label>
+          <select class="form-select" id="vialSelBac">
+            <option value="">Choose a vial…</option>
+            {% for v in vials %}
+              <option value="{{ v.id }}">{{ v.peptide.name if v.peptide else 'Peptide' }} — target {% if v.bacteriostatic_water_ml %}{{ v.bacteriostatic_water_ml }} mL{% else %}(none saved){% endif %}</option>
+            {% endfor %}
+          </select>
+
+          <div class="row g-2 mt-2">
+            <div class="col-6">
+              <label class="form-label">Target BAC (mL) override</label>
+              <input class="form-control" id="bacTargetOverride" placeholder="e.g., 2.0">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Tolerance (mL)</label>
+              <select class="form-select" id="tolMl">
+                <option value="0.05">±0.05</option>
+                <option value="0.1" selected>±0.1</option>
+                <option value="0.2">±0.2</option>
+                <option value="0.5">±0.5</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <hr class="my-3">
+
+        <div class="small text-muted">
+          <div class="fw-semibold mb-1">How it works</div>
+          <ol class="mb-0">
+            <li>Start camera, hold syringe flat and centered.</li>
+            <li>Tap the <strong>0</strong> mark and the <strong>max</strong> mark (1.0 mL or 3.0 mL).</li>
+            <li>Tap the <strong>plunger edge</strong>. We compute mL/units and compare to expected.</li>
+          </ol>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mt-3">
+      <div class="card-header bg-white fw-semibold">2) Results</div>
+      <div class="card-body">
+        <div id="resultBox" class="p-3 rounded-3 border bg-light">
+          <div class="text-muted small">Measured</div>
+          <div class="fs-4 fw-semibold" id="measuredMain">—</div>
+          <div class="text-muted small" id="measuredSub">—</div>
+        </div>
+
+        <div class="mt-3 d-none" id="compareBox">
+          <div class="p-3 rounded-3 border" id="verdictBox">
+            <div class="text-muted small">Verdict</div>
+            <div class="fs-4 fw-semibold" id="verdict">—</div>
+            <div class="text-muted small" id="verdictHint"></div>
+          </div>
+          <div class="text-muted small mt-2" id="compareMath"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="col-12 col-lg-7">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <div class="fw-semibold">3) Camera</div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-outline-primary btn-sm" id="startBtn" type="button"><i class="bi bi-play"></i> Start</button>
+          <button class="btn btn-outline-secondary btn-sm" id="flipBtn" type="button"><i class="bi bi-arrow-repeat"></i> Flip</button>
+          <button class="btn btn-primary btn-sm" id="snapBtn" type="button"><i class="bi bi-camera"></i> Snap</button>
+          <button class="btn btn-outline-danger btn-sm" id="resetBtn" type="button"><i class="bi bi-x-circle"></i> Reset taps</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="text-muted small mb-2">
+          For best accuracy: bright light, syringe flat, avoid glare, keep the barrel horizontal.
+        </div>
+
+        <div class="ratio ratio-16x9 mb-2" style="background:#000;border-radius:12px;overflow:hidden;">
+          <video id="video" autoplay playsinline style="width:100%;height:100%;object-fit:contain;"></video>
+          <canvas id="canvas" style="display:none;"></canvas>
+          <canvas id="overlay" style="position:absolute;inset:0;"></canvas>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2">
+          <span class="badge text-bg-light border" id="stepBadge">Step: Tap 0 mark</span>
+          <span class="text-muted small" id="tapHelp">Tap directly on the 0 line mark.</span>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const overlay = document.getElementById('overlay');
+  const octx = overlay.getContext('2d');
+
+  const startBtn = document.getElementById('startBtn');
+  const flipBtn = document.getElementById('flipBtn');
+  const snapBtn = document.getElementById('snapBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  const modeSelect = document.getElementById('modeSelect');
+  const doseConfig = document.getElementById('doseConfig');
+  const bacConfig = document.getElementById('bacConfig');
+
+  const protocolSel = document.getElementById('protocolSel');
+  const vialSelDose = document.getElementById('vialSelDose');
+  const doseOverride = document.getElementById('doseOverride');
+  const tolUnits = document.getElementById('tolUnits');
+
+  const vialSelBac = document.getElementById('vialSelBac');
+  const bacTargetOverride = document.getElementById('bacTargetOverride');
+  const tolMl = document.getElementById('tolMl');
+
+  const stepBadge = document.getElementById('stepBadge');
+  const tapHelp = document.getElementById('tapHelp');
+
+  const measuredMain = document.getElementById('measuredMain');
+  const measuredSub = document.getElementById('measuredSub');
+
+  const compareBox = document.getElementById('compareBox');
+  const verdictBox = document.getElementById('verdictBox');
+  const verdict = document.getElementById('verdict');
+  const verdictHint = document.getElementById('verdictHint');
+  const compareMath = document.getElementById('compareMath');
+
+  let stream = null;
+  let facingMode = "environment";
+  let lastImage = null; // ImageData snapshot
+  let taps = []; // {x,y} on overlay coords
+  let step = 0; // 0=zero,1=max,2=plunger
+
+  function setStep(n){
+    step = n;
+    const labels = ["Tap 0 mark", "Tap max mark", "Tap plunger edge"];
+    const helps = [
+      "Tap directly on the 0 line mark.",
+      "Tap on the max mark (1.0 mL for dose, 3.0 mL for BAC).",
+      "Tap the edge of the rubber plunger (dose/BAC line)."
+    ];
+    stepBadge.textContent = "Step: " + labels[n];
+    tapHelp.textContent = helps[n];
+  }
+
+  function clearOverlay(){
+    octx.clearRect(0,0,overlay.width, overlay.height);
+  }
+
+  function drawGuides(){
+    clearOverlay();
+    // center guide line
+    octx.strokeStyle = "rgba(255,255,255,0.5)";
+    octx.lineWidth = 2;
+    octx.beginPath();
+    octx.moveTo(overlay.width/2, 0);
+    octx.lineTo(overlay.width/2, overlay.height);
+    octx.stroke();
+
+    // taps
+    taps.forEach((p,i) => {
+      octx.fillStyle = i === 0 ? "rgba(0,200,255,0.9)" : i === 1 ? "rgba(255,200,0,0.9)" : "rgba(0,255,120,0.9)";
+      octx.beginPath();
+      octx.arc(p.x, p.y, 8, 0, Math.PI*2);
+      octx.fill();
+      octx.fillStyle = "rgba(0,0,0,0.8)";
+      octx.font = "12px system-ui";
+      octx.fillText(String(i+1), p.x+10, p.y+4);
+    });
+
+    // connect zero->max
+    if(taps.length >= 2){
+      octx.strokeStyle = "rgba(255,255,255,0.7)";
+      octx.lineWidth = 2;
+      octx.beginPath();
+      octx.moveTo(taps[0].x, taps[0].y);
+      octx.lineTo(taps[1].x, taps[1].y);
+      octx.stroke();
+    }
+  }
+
+  async function startCamera(){
+    if(stream){
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+    video.srcObject = stream;
+  }
+
+  function resizeCanvases(){
+    const rect = video.getBoundingClientRect();
+    overlay.width = Math.max(1, Math.floor(rect.width));
+    overlay.height = Math.max(1, Math.floor(rect.height));
+    drawGuides();
+  }
+
+  window.addEventListener('resize', resizeCanvases);
+
+  startBtn.addEventListener('click', async () => {
+    try{
+      await startCamera();
+      setTimeout(resizeCanvases, 200);
+    }catch(e){
+      alert("Camera access failed. Please allow camera permissions.");
+    }
+  });
+
+  flipBtn.addEventListener('click', async () => {
+    facingMode = (facingMode === "environment") ? "user" : "environment";
+    try{
+      await startCamera();
+      setTimeout(resizeCanvases, 200);
+    }catch(e){
+      alert("Camera flip failed.");
+    }
+  });
+
+  snapBtn.addEventListener('click', () => {
+    if(!video.videoWidth){
+      alert("Start the camera first.");
+      return;
+    }
+    // capture
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
+    lastImage = ctx.getImageData(0,0,canvas.width,canvas.height);
+
+    // show snapshot behind overlay by setting video to pause
+    video.pause();
+
+    // Re-align overlay to current displayed size
+    resizeCanvases();
+
+    // Reset taps for new snap
+    taps = [];
+    setStep(0);
+    drawGuides();
+
+    measuredMain.textContent = "Snapshot ready";
+    measuredSub.textContent = "Tap 0 mark → max mark → plunger edge";
+    compareBox.classList.add("d-none");
+  });
+
+  resetBtn.addEventListener('click', () => {
+    taps = [];
+    setStep(0);
+    drawGuides();
+    measuredMain.textContent = "—";
+    measuredSub.textContent = "—";
+    compareBox.classList.add("d-none");
+  });
+
+  modeSelect.addEventListener('change', () => {
+    const mode = modeSelect.value;
+    doseConfig.classList.toggle('d-none', mode !== "dose");
+    bacConfig.classList.toggle('d-none', mode !== "bac");
+    resetBtn.click();
+  });
+
+  function overlayToImageCoords(x, y){
+    // Map overlay coords (display) to image coords (captured)
+    const rect = overlay.getBoundingClientRect();
+    const dx = x / rect.width;
+    const dy = y / rect.height;
+    // video is object-fit: contain; need account for letterboxing
+    // We'll approximate by mapping to visible region based on aspect ratios
+    const dispW = rect.width, dispH = rect.height;
+    const imgW = canvas.width, imgH = canvas.height;
+    const dispAR = dispW/dispH;
+    const imgAR = imgW/imgH;
+
+    let vx=0, vy=0, vw=dispW, vh=dispH;
+    if(imgAR > dispAR){
+      // letterbox top/bottom
+      vh = dispW / imgAR;
+      vy = (dispH - vh)/2;
+    }else{
+      // letterbox left/right
+      vw = dispH * imgAR;
+      vx = (dispW - vw)/2;
+    }
+
+    const nx = (x - vx) / vw;
+    const ny = (y - vy) / vh;
+
+    return { ix: Math.max(0, Math.min(imgW-1, Math.round(nx * imgW))),
+             iy: Math.max(0, Math.min(imgH-1, Math.round(ny * imgH))) };
+  }
+
+  function computeMeasured(){
+    if(taps.length < 3) return null;
+    // We measure along the line from zero->max in overlay coords.
+    const p0 = taps[0], p1 = taps[1], pp = taps[2];
+    const vx = p1.x - p0.x;
+    const vy = p1.y - p0.y;
+    const len2 = vx*vx + vy*vy;
+    if(len2 < 10) return null;
+    // projection of plunger point onto axis
+    const t = ((pp.x - p0.x)*vx + (pp.y - p0.y)*vy) / len2;
+    const frac = Math.max(0, Math.min(1, t));
+    return frac;
+  }
+
+  function setVerdict(ok, text, hint){
+    verdictBox.classList.remove('bg-success','bg-danger','text-white','border-success','border-danger');
+    if(ok){
+      verdictBox.classList.add('bg-success','text-white','border-success');
+    }else{
+      verdictBox.classList.add('bg-danger','text-white','border-danger');
+    }
+    verdict.textContent = text;
+    verdictHint.textContent = hint || "";
+  }
+
+  async function fetchExpected(params){
+    const qs = new URLSearchParams(params);
+    const res = await fetch('/api/syringe-check/expected?' + qs.toString());
+    return await res.json();
+  }
+
+  async function compareToExpected(measured){
+    const mode = modeSelect.value;
+
+    if(mode === "dose"){
+      const protocol_id = protocolSel.value;
+      const vial_id = vialSelDose.value;
+      const dose_mcg = (doseOverride.value || '').trim();
+      const tol = parseFloat(tolUnits.value);
+
+      if(!protocol_id && !dose_mcg){
+        setVerdict(false, "Need protocol/dose", "Pick a protocol or enter a dose override.");
+        return;
+      }
+      if(!vial_id){
+        setVerdict(false, "Need vial", "Pick a vial to compute concentration.");
+        return;
+      }
+
+      const data = await fetchExpected({ protocol_id, vial_id, dose_mcg });
+      const expUnits = data.expected_units_u100;
+      if(expUnits === null){
+        setVerdict(false, "Missing BAC mL", "Save BAC mL on vial (reconstitution) to compute expected units.");
+        return;
+      }
+
+      const measuredUnits = measured * 100.0; // 1mL => 100 units
+      const diff = Math.abs(measuredUnits - expUnits);
+      const ok = diff <= tol;
+
+      compareBox.classList.remove("d-none");
+      compareMath.textContent = `Expected: ${expUnits.toFixed(1)} units. Measured: ${measuredUnits.toFixed(1)} units.`;
+
+      setVerdict(
+        ok,
+        ok ? "Looks right" : "Mismatch",
+        ok ? `Within ±${tol} units.` : `Off by ~${diff.toFixed(1)} units (tolerance ±${tol}).`
+      );
+    }else{
+      // bac
+      const vial_id = vialSelBac.value;
+      const water_ml = (bacTargetOverride.value || '').trim();
+      const tol = parseFloat(tolMl.value);
+
+      if(!vial_id && !water_ml){
+        setVerdict(false, "Need target", "Pick a vial with saved BAC target or enter override.");
+        return;
+      }
+
+      const data = await fetchExpected({ vial_id, water_ml });
+      const target = data.water_ml;
+      if(target === null){
+        setVerdict(false, "Need target", "Enter a target BAC mL override.");
+        return;
+      }
+
+      const measuredMl = measured * 3.0; // 3mL syringe
+      const diff = Math.abs(measuredMl - target);
+      const ok = diff <= tol;
+
+      compareBox.classList.remove("d-none");
+      compareMath.textContent = `Target: ${Number(target).toFixed(2)} mL. Measured: ${measuredMl.toFixed(2)} mL.`;
+
+      setVerdict(
+        ok,
+        ok ? "Looks right" : "Mismatch",
+        ok ? `Within ±${tol} mL.` : `Off by ~${diff.toFixed(2)} mL (tolerance ±${tol}).`
+      );
+    }
+  }
+
+  overlay.addEventListener('click', async (e) => {
+    if(!lastImage){
+      alert("Tap Snap first to capture an image.");
+      return;
+    }
+    const rect = overlay.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    taps.push({x,y});
+    if(taps.length > 3) taps = taps.slice(0,3);
+
+    setStep(Math.min(2, taps.length)); // after 1st tap -> step 1, after 2nd -> step2, after 3rd stays
+    drawGuides();
+
+    if(taps.length === 3){
+      const frac = computeMeasured();
+      if(frac === null){
+        measuredMain.textContent = "—";
+        measuredSub.textContent = "Try again (bad calibration line)";
+        return;
+      }
+      const mode = modeSelect.value;
+      if(mode === "dose"){
+        const units = frac * 100.0;
+        measuredMain.textContent = units.toFixed(1) + " units";
+        measuredSub.textContent = (frac).toFixed(3) + " mL (U-100)";
+      }else{
+        const ml = frac * 3.0;
+        measuredMain.textContent = ml.toFixed(2) + " mL";
+        measuredSub.textContent = "Fraction of barrel: " + frac.toFixed(3);
+      }
+      await compareToExpected(frac);
+    }
+  });
+
+  // init
+  setStep(0);
+})();
+</script>
+{% endblock %}
