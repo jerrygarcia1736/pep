@@ -644,29 +644,22 @@ def scan_food():
       document.getElementById('openCameraBtn')?.addEventListener('click', startCamera);
       document.getElementById('stopCameraBtn')?.addEventListener('click', stopCamera);
       document.getElementById('captureFrameBtn')?.addEventListener('click', capturePhotoToFileInput);
-      // Auto-open camera ONLY when arriving via nav click (?autocam=1) and only once per session for this page.
+
+      // Auto-open camera on mobile (requires user gesture in some browsers; we attempt and fall back silently).
       window.addEventListener('DOMContentLoaded', () => {
         const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches;
-        if (!isMobile) return;
-
-        const params = new URLSearchParams(window.location.search);
-        const wantsAuto = params.get('autocam') === '1';
-        if (!wantsAuto) return;
-
-        const key = 'autocam_once:/scan-peptides';
-        if (sessionStorage.getItem(key) === '1') return;
-
-        // Mark as used and remove the query param so refresh/back won't retrigger.
-        sessionStorage.setItem(key, '1');
-        try {
-          params.delete('autocam');
-          const newUrl = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '') + window.location.hash;
-          history.replaceState(null, '', newUrl);
-        } catch (e) {}
-
-        setTimeout(() => { startCamera(); }, 350);
+        const hasBtn = document.getElementById('openCameraBtn');
+        if (isMobile && hasBtn) {
+          // Small delay helps Safari settle layout before requesting camera.
+          setTimeout(() => {
+            // Attempt to open camera; if blocked, user can tap "Use Camera".
+            startCamera();
+          }, 350);
+        }
       });
-// --- Mobile camera support (direct capture) for Food ---
+    
+
+      // --- Mobile camera support (direct capture) for Food ---
       let foodCameraStreamObj = null;
 
       async function startFoodCamera() {

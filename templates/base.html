@@ -48,7 +48,7 @@
         {% if current_user.is_authenticated %}
           <li class="nav-item">
             <a class="nav-link {% if request.endpoint in ['scan_peptides', 'scan_peptides_page'] or request.path == '/scan-peptides' %}active{% endif %}"
-               href="{{ url_for('scan_peptides') if has_endpoint('scan_peptides') else '/scan-peptides' }}">
+               href="{{ (url_for('scan_peptides') ~ '?autocam=1') if has_endpoint('scan_peptides') else '/scan-peptides?autocam=1' }}">
               <i class="bi bi-upc-scan"></i> Scan Peptides
             </a>
           </li>
@@ -57,7 +57,7 @@
         {# Nutrition renamed and icon matched to Scan Peptides #}
         {% if has_endpoint('nutrition') %}
           <li class="nav-item">
-            <a class="nav-link {% if request.endpoint == 'nutrition' %}active{% endif %}" href="{{ url_for('nutrition') }}">
+            <a class="nav-link {% if request.endpoint == 'nutrition' %}active{% endif %}" href="{{ (url_for('scan_nutrition') ~ '?autocam=1') if has_endpoint('scan_nutrition') else ((url_for('nutrition') ~ '?autocam=1') if has_endpoint('nutrition') else '/scan-nutrition?autocam=1') }}">
               <i class="bi bi-upc-scan"></i> Scan Nutrition
             </a>
           </li>
@@ -102,11 +102,11 @@
               <i class="bi bi-wrench-adjustable"></i> Tools
             </a>
             <ul class="dropdown-menu" aria-labelledby="toolsDrop">
-              <li><a class="dropdown-item" href="/scan-food"><i class="bi bi-camera"></i> Scan Food</a></li>
+              <li><a class="dropdown-item" href="/scan-food?autocam=1"><i class="bi bi-camera"></i> Scan Food</a></li>
               {# Removed Scan Peptides from Tools since it's now in the top ribbon #}
               {% if has_endpoint('nutrition') %}
                 <li><hr class="dropdown-divider"></li>
-                <li><a class="dropdown-item" href="{{ url_for('nutrition') }}"><i class="bi bi-upc-scan"></i> Scan Nutrition</a></li>
+                <li><a class="dropdown-item" href="{{ (url_for('scan_nutrition') ~ '?autocam=1') if has_endpoint('scan_nutrition') else url_for('nutrition') }}"><i class="bi bi-upc-scan"></i> Scan Nutrition</a></li>
               {% endif %}
             </ul>
           </li>
