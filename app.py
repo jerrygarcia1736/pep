@@ -11,27 +11,13 @@ from __future__ import annotations
 
 import os
 import json
-import re
 import requests
 import secrets
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any, Dict, List, Tuple
 
-# Optional OCR dependencies (installed via requirements when enabled)
-try:
-    import easyocr  # type: ignore
-    import numpy as np  # type: ignore
-    import cv2  # type: ignore
-    from PIL import Image  # type: ignore
-except Exception:  # pragma: no cover
-    easyocr = None
-    np = None
-    cv2 = None
-    Image = None
-
-
-from flask import Flask, render_template, render_template_string, request, redirect, url_for, flash, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, render_template_string
 from werkzeug.security import generate_password_hash, check_password_hash
 from jinja2 import TemplateNotFound
 
@@ -58,132 +44,6 @@ def from_json_filter(value):
         return json.loads(value)
     except:
         return []
-
-# -----------------------------------------------------------------------------
-# OCR helpers (EasyOCR; no Docker/system packages required)
-# -----------------------------------------------------------------------------
-_OCR_READER = None
-
-def _get_ocr_reader():
-    """Lazy-load OCR reader so we don't pay startup cost on every worker."""
-    global _OCR_READER
-    if _OCR_READER is not None:
-        return _OCR_READER
-    if easyocr is None:
-        return None
-    # English only keeps it lighter/faster.
-    _OCR_READER = easyocr.Reader(["en"], gpu=False)
-    return _OCR_READER
-
-def _preprocess_for_ocr(image_bytes: bytes):
-    """Return a numpy image (grayscale) optimized for OCR."""
-    if np is None or cv2 is None:
-        return None
-    arr = np.frombuffer(image_bytes, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Contrast + denoise + threshold improves handwriting/marker text.
-    gray = cv2.bilateralFilter(gray, 7, 50, 50)
-    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
-    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return th
-
-def _ocr_lines(image_bytes: bytes) -> list[dict[str, Any]]:
-    """Run OCR and return [{text, conf}, ...]"""
-    reader = _get_ocr_reader()
-    if reader is None or cv2 is None:
-        return []
-    img = _preprocess_for_ocr(image_bytes)
-    if img is None:
-        return []
-    # EasyOCR returns list of (bbox, text, conf)
-    results = reader.readtext(img)
-    out: list[dict[str, Any]] = []
-    for _bbox, txt, conf in results:
-        txt = (txt or "").strip()
-        if txt:
-            out.append({"text": txt, "conf": float(conf) if conf is not None else 0.0})
-    return out
-
-def _normalize_token(s: str) -> str:
-    s = (s or "").upper()
-    s = "".join(ch for ch in s if ch.isalnum())
-    return s
-
-def _extract_tokens(lines: list[dict[str, Any]]) -> list[str]:
-    tokens: list[str] = []
-    for ln in lines:
-        t = ln.get("text", "")
-        for part in re.split(r"\s+", t.strip()):
-            nt = _normalize_token(part)
-            if nt and nt not in tokens:
-                tokens.append(nt)
-    return tokens
-
-def _peptide_name_candidates(ocr_lines: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
-    """Return ranked peptide candidates from OCR output."""
-    try:
-        import difflib
-    except Exception:
-        difflib = None  # type: ignore
-
-    peptides = _load_peptides_list()  # may be [] if DB missing; OK
-    # Normalize peptide list into [{name, common_name}]
-    normalized: list[tuple[str, str]] = []
-    for p in peptides:
-        name = ""
-        common = ""
-        if isinstance(p, dict):
-            name = str(p.get("name") or p.get("peptide") or "")
-            common = str(p.get("common_name") or p.get("common") or "")
-        else:
-            name = str(getattr(p, "name", "") or getattr(p, "peptide", "") or "")
-            common = str(getattr(p, "common_name", "") or "")
-        if name:
-            normalized.append((name, common))
-
-    tokens = _extract_tokens(ocr_lines)
-    joined = _normalize_token(" ".join(tokens))
-
-    scored: list[tuple[float, str]] = []
-    for name, common in normalized:
-        cand = name.strip()
-        n = _normalize_token(cand)
-        if not n:
-            continue
-
-        # Score: token containment + fuzzy similarity
-        score = 0.0
-        if n in joined:
-            score += 0.9
-        # Handle short handwritten like "BPC" matching "BPC157"
-        if any(t and (t in n or n in t) for t in tokens):
-            score += 0.4
-
-        if difflib is not None:
-            score += difflib.SequenceMatcher(None, n, joined).ratio() * 0.7
-
-        # Slight boost if common_name matches too
-        if common:
-            c = _normalize_token(common)
-            if c and c in joined:
-                score += 0.2
-
-        scored.append((score, cand))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    out: list[dict[str, Any]] = []
-    seen = set()
-    for score, name in scored:
-        if name in seen:
-            continue
-        seen.add(name)
-        out.append({"name": name, "score": round(float(score), 3)})
-        if len(out) >= limit:
-            break
-    return out
 
 # -----------------------------------------------------------------------------
 # Models
@@ -384,397 +244,6 @@ def require_onboarding(view_func):
             return redirect(url_for("onboarding_step_2"))
         return view_func(*args, **kwargs)
     return wrapper
-# -----------------------------------------------------------------------------
-# Scan (mobile camera): Scan Peptides + Scan Food
-# -----------------------------------------------------------------------------
-_SCAN_BASE_HTML = """<!doctype html>
-<html>
-<head>
-  <meta charset='utf-8' />
-  <meta name='viewport' content='width=device-width, initial-scale=1' />
-  <title>{{ title }}</title>
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:18px;}
-    .card{max-width:720px;margin:0 auto;padding:16px;border:1px solid #e6e6e6;border-radius:14px;}
-    h1{font-size:20px;margin:0 0 8px;}
-    p{color:#444;line-height:1.35}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    input[type=file]{width:100%}
-    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;background:#111;color:#fff;font-weight:600}
-    button:disabled{opacity:.55}
-    pre{white-space:pre-wrap;background:#f7f7f7;padding:12px;border-radius:10px;border:1px solid #eee}
-    .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid #ddd;margin:6px 6px 0 0;cursor:pointer}
-    .muted{color:#666;font-size:13px}
-    a{color:#0b5fff;text-decoration:none}
-  </style>
-</head>
-<body>
-  <div class='card'>
-    <h1>{{ title }}</h1>
-    <p class='muted'>Tip: fill the frame with what you want scanned. Good lighting helps.</p>
-    <div class='row'>
-      <input id='img' type='file' accept='image/*' capture='environment' />
-      <button id='go' disabled>Scan</button>
-    </div>
-    <p id='status' class='muted'></p>
-    <div id='candidates'></div>
-    <pre id='out' style='display:none'></pre>
-    <div id='actions' style='display:none;margin-top:10px'></div>
-    <p class='muted' style='margin-top:14px'>OCR is assistive — always confirm.</p>
-  </div>
-
-<script>
-const btn = document.getElementById('go');
-const file = document.getElementById('img');
-const out = document.getElementById('out');
-const statusEl = document.getElementById('status');
-const cand = document.getElementById('candidates');
-const actions = document.getElementById('actions');
-
-file.addEventListener('change', () => btn.disabled = !file.files.length);
-
-function setStatus(s){ statusEl.textContent = s || ''; }
-
-btn.addEventListener('click', async () => {
-  if (!file.files.length) return;
-  btn.disabled = true;
-  out.style.display='none';
-  cand.innerHTML = '';
-  actions.style.display='none';
-  actions.innerHTML = '';
-  setStatus('Scanning…');
-
-  const fd = new FormData();
-  fd.append('image', file.files[0]);
-
-  try{
-    const res = await fetch('{{ api_endpoint }}', { method:'POST', body: fd });
-    const data = await res.json();
-    if (!res.ok){
-      throw new Error(data && data.error ? data.error : 'Scan failed');
-    }
-    setStatus('Done.');
-    out.style.display='block';
-    out.textContent = data.raw_text || '';
-
-    if (data.candidates && data.candidates.length){
-      const h = document.createElement('div');
-      h.className='muted';
-      h.textContent='Suggestions:';
-      cand.appendChild(h);
-
-      data.candidates.forEach(c => {
-        const el = document.createElement('span');
-        el.className='pill';
-        el.textContent = c.name + ' (' + c.score + ')';
-        el.onclick = () => {
-          navigator.clipboard?.writeText(c.name);
-          setStatus('Copied: ' + c.name);
-          if (data.next_url){
-            actions.style.display='block';
-            actions.innerHTML = `<a href="${data.next_url}">Continue</a>`;
-          }
-        };
-        cand.appendChild(el);
-      });
-    }
-
-    if (data.next_url){
-      actions.style.display='block';
-      actions.innerHTML = `<a href="${data.next_url}">Continue</a>`;
-    }
-  }catch(e){
-    setStatus('Error: ' + e.message);
-  }finally{
-    btn.disabled = false;
-  }
-});
-</script>
-</body>
-</html>
-"""
-
-_SCAN_FOOD_HTML = r"""
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>{{ title or "Scan Food" }}</title>
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:18px;max-width:720px}
-    h1{font-size:20px;margin:0 0 10px}
-    .tabs{display:flex;gap:8px;margin:12px 0}
-    .tab{border:1px solid #ccc;border-radius:10px;padding:8px 10px;background:#fff;cursor:pointer}
-    .tab.active{border-color:#111}
-    .card{border:1px solid #ddd;border-radius:14px;padding:12px;margin-top:10px}
-    .hint{color:#555;font-size:13px;margin:8px 0 0}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    button{padding:10px 12px;border:1px solid #111;background:#111;color:#fff;border-radius:12px;cursor:pointer}
-    button.secondary{background:#fff;color:#111}
-    button:disabled{opacity:.55;cursor:not-allowed}
-    textarea{width:100%;min-height:110px;margin-top:10px;font-family:ui-monospace,Menlo,monospace}
-    .pred{display:flex;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid #eee;border-radius:12px;margin:8px 0;cursor:pointer}
-    .pred:hover{border-color:#bbb}
-    .small{font-size:12px;color:#666}
-    .status{margin-top:10px;color:#444}
-    img.preview{max-width:100%;border-radius:12px;border:1px solid #eee}
-    .note{font-size:12px;color:#666;line-height:1.4}
-  </style>
-</head>
-<body>
-<h1>{{ title or "Scan Food" }}</h1>
-<div class="note">
-  Choose a scan mode:
-  <ul>
-    <li><b>Photo (AI Guess)</b>: take a picture of the food (e.g., an apple) and get best-guess labels.</li>
-    <li><b>Text (OCR)</b>: take a picture of a receipt/label and extract text.</li>
-  </ul>
-  Always confirm before saving—these are suggestions.
-</div>
-
-<div class="tabs">
-  <button id="tab-photo" class="tab active" type="button">Photo (AI Guess)</button>
-  <button id="tab-ocr" class="tab" type="button">Text (OCR)</button>
-</div>
-
-<div id="panel-photo" class="card">
-  <div class="row">
-    <input id="foodPhoto" type="file" accept="image/*" capture="environment"/>
-    <button id="btnClassify" type="button">Analyze Photo</button>
-    <button id="btnClearPhoto" class="secondary" type="button">Clear</button>
-  </div>
-  <div class="hint">Tip: center the food, fill most of the frame, and use bright light.</div>
-  <div id="photoStatus" class="status"></div>
-  <div id="photoPreviewWrap" style="margin-top:10px;display:none;">
-    <img id="photoPreview" class="preview" alt="preview"/>
-  </div>
-  <div id="predictions" style="margin-top:12px;"></div>
-</div>
-
-<div id="panel-ocr" class="card" style="display:none;">
-  <div class="row">
-    <input id="imageInput" type="file" accept="image/*" capture="environment"/>
-    <button id="btnOcr" type="button">Scan Text</button>
-    <button id="btnClearOcr" class="secondary" type="button">Clear</button>
-  </div>
-  <div class="hint">Best for receipts, labels, or handwritten notes about what you ate.</div>
-  <div id="ocrStatus" class="status"></div>
-  <textarea id="ocrText" placeholder="OCR results will appear here..."></textarea>
-  <div class="row" style="margin-top:10px;">
-    <button id="btnUseOcr" type="button">Use Text in Food Log</button>
-  </div>
-</div>
-
-<!-- TensorFlow.js + MobileNet (open source) for in-browser classification -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
-
-<script>
-const tabPhoto = document.getElementById('tab-photo');
-const tabOcr = document.getElementById('tab-ocr');
-const panelPhoto = document.getElementById('panel-photo');
-const panelOcr = document.getElementById('panel-ocr');
-
-function setTab(which){
-  const photo = (which === 'photo');
-  tabPhoto.classList.toggle('active', photo);
-  tabOcr.classList.toggle('active', !photo);
-  panelPhoto.style.display = photo ? 'block' : 'none';
-  panelOcr.style.display = photo ? 'none' : 'block';
-}
-tabPhoto.addEventListener('click', () => setTab('photo'));
-tabOcr.addEventListener('click', () => setTab('ocr'));
-
-const foodPhoto = document.getElementById('foodPhoto');
-const btnClassify = document.getElementById('btnClassify');
-const btnClearPhoto = document.getElementById('btnClearPhoto');
-const photoStatus = document.getElementById('photoStatus');
-const photoPreviewWrap = document.getElementById('photoPreviewWrap');
-const photoPreview = document.getElementById('photoPreview');
-const predictions = document.getElementById('predictions');
-
-let mobilenetModel = null;
-
-foodPhoto.addEventListener('change', () => {
-  const file = foodPhoto.files && foodPhoto.files[0];
-  predictions.innerHTML = '';
-  photoStatus.textContent = '';
-  if (!file) { photoPreviewWrap.style.display = 'none'; return; }
-  const url = URL.createObjectURL(file);
-  photoPreview.src = url;
-  photoPreviewWrap.style.display = 'block';
-});
-
-btnClearPhoto.addEventListener('click', () => {
-  foodPhoto.value = '';
-  photoPreviewWrap.style.display = 'none';
-  predictions.innerHTML = '';
-  photoStatus.textContent = '';
-});
-
-async function ensureModel(){
-  if (mobilenetModel) return mobilenetModel;
-  photoStatus.textContent = 'Loading model...';
-  mobilenetModel = await mobilenet.load({version: 2, alpha: 1.0});
-  return mobilenetModel;
-}
-
-btnClassify.addEventListener('click', async () => {
-  const file = foodPhoto.files && foodPhoto.files[0];
-  predictions.innerHTML = '';
-  if (!file) { photoStatus.textContent = 'Choose a photo first.'; return; }
-  btnClassify.disabled = true;
-  try{
-    await ensureModel();
-    photoStatus.textContent = 'Analyzing...';
-    await new Promise((res, rej) => {
-      if (photoPreview.complete) return res();
-      photoPreview.onload = () => res();
-      photoPreview.onerror = () => rej(new Error('Could not load image.'));
-    });
-    const preds = await mobilenetModel.classify(photoPreview, 5);
-    if (!preds || preds.length === 0){
-      photoStatus.textContent = 'No guesses found. Try a clearer photo.';
-      return;
-    }
-    photoStatus.textContent = 'Tap a guess to log it:';
-    preds.forEach(p => {
-      const label = (p.className || '').split(',')[0].trim();
-      const pct = Math.round((p.probability || 0) * 100);
-      const div = document.createElement('div');
-      div.className = 'pred';
-      div.innerHTML = `<div><b>${label}</b><div class="small">${p.className}</div></div><div>${pct}%</div>`;
-      div.addEventListener('click', () => {
-        window.location.href = '/log-food?q=' + encodeURIComponent(label);
-      });
-      predictions.appendChild(div);
-    });
-  }catch(e){
-    photoStatus.textContent = 'Error: ' + e.message;
-  }finally{
-    btnClassify.disabled = false;
-  }
-});
-
-// --- OCR panel logic (server-side OCR) ---
-const imageInput = document.getElementById('imageInput');
-const btnOcr = document.getElementById('btnOcr');
-const btnClearOcr = document.getElementById('btnClearOcr');
-const ocrStatus = document.getElementById('ocrStatus');
-const ocrText = document.getElementById('ocrText');
-const btnUseOcr = document.getElementById('btnUseOcr');
-
-btnClearOcr.addEventListener('click', () => {
-  imageInput.value = '';
-  ocrText.value = '';
-  ocrStatus.textContent = '';
-});
-
-btnUseOcr.addEventListener('click', () => {
-  const q = (ocrText.value || '').trim();
-  if (!q) { ocrStatus.textContent = 'Scan text first.'; return; }
-  window.location.href = '/log-food?q=' + encodeURIComponent(q);
-});
-
-btnOcr.addEventListener('click', async () => {
-  const file = imageInput.files && imageInput.files[0];
-  if (!file) { ocrStatus.textContent = 'Choose a photo first.'; return; }
-  btnOcr.disabled = true;
-  try{
-    ocrStatus.textContent = 'Uploading...';
-    const form = new FormData();
-    form.append('image', file);
-    const res = await fetch('{{ api_endpoint }}', { method:'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'OCR failed');
-    ocrText.value = data.raw_text || '';
-    ocrStatus.textContent = 'Done.';
-  }catch(e){
-    ocrStatus.textContent = 'Error: ' + e.message;
-  }finally{
-    btnOcr.disabled = false;
-  }
-});
-</script>
-</body>
-</html>
-
-"""
-
-
-@app.route("/scan-peptides", methods=["GET"])
-@login_required
-@require_onboarding
-def scan_peptides():
-    """Mobile camera OCR to capture handwritten/printed peptide labels."""
-    # Prefer a real template if you add one later.
-    try:
-        return render_template("scan_peptides.html", title="Scan Peptides", api_endpoint=url_for("api_ocr_peptides"))
-    except TemplateNotFound:
-        return render_template_string(_SCAN_BASE_HTML, title="Scan Peptides", api_endpoint=url_for("api_ocr_peptides"))
-
-@app.route("/scan-food", methods=["GET"])
-@login_required
-@require_onboarding
-def scan_food():
-    """Mobile camera OCR to capture food text (labels/receipts)."""
-    try:
-        return render_template("scan_food.html", title="Scan Food", api_endpoint=url_for("api_ocr_food"))
-    except TemplateNotFound:
-        return render_template_string(_SCAN_FOOD_HTML, title="Scan Food", api_endpoint=url_for("api_ocr_food"))
-
-@app.route("/api/ocr/peptides", methods=["POST"])
-@login_required
-@require_onboarding
-def api_ocr_peptides():
-    if easyocr is None:
-        return jsonify({"error": "OCR not installed. Add easyocr deps and redeploy."}), 503
-
-    f = request.files.get("image")
-    if not f:
-        return jsonify({"error": "Missing image"}), 400
-
-    image_bytes = f.read()
-    lines = _ocr_lines(image_bytes)
-    raw_text = "\n".join([ln["text"] for ln in lines])[:2000]
-
-    candidates = _peptide_name_candidates(lines, limit=8)
-    # Send them to the existing Add Vial page to finish details.
-    next_url = url_for("add_vial")
-
-    return jsonify({
-        "raw_text": raw_text,
-        "lines": lines[:30],
-        "candidates": candidates,
-        "next_url": next_url
-    })
-
-@app.route("/api/ocr/food", methods=["POST"])
-@login_required
-@require_onboarding
-def api_ocr_food():
-    if easyocr is None:
-        return jsonify({"error": "OCR not installed. Add easyocr deps and redeploy."}), 503
-
-    f = request.files.get("image")
-    if not f:
-        return jsonify({"error": "Missing image"}), 400
-
-    image_bytes = f.read()
-    lines = _ocr_lines(image_bytes)
-    # Create a usable query string for your existing /log-food flow
-    raw_text = "\n".join([ln["text"] for ln in lines])[:2000]
-    query = " ".join([ln["text"] for ln in lines])[:400].strip()
-    next_url = url_for("log_food", q=query) if query else url_for("log_food")
-
-    return jsonify({
-        "raw_text": raw_text,
-        "lines": lines[:30],
-        "candidates": [],  # food suggestions intentionally omitted (depends on your nutrition provider)
-        "next_url": next_url
-    })
-
 
 
 # -----------------------------------------------------------------------------
@@ -981,6 +450,413 @@ PROTOCOL_TEMPLATES: dict[str, dict[str, str]] = {
 # -----------------------------------------------------------------------------
 # Core routes
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Scan Food + Scan Peptides (NO templates, NO docker)
+# - Scan Food: photo -> AI guess (MobileNet) OR OCR text (Tesseract.js)
+# - Scan Peptides: OCR text -> match to known peptides
+# -----------------------------------------------------------------------------
+
+@app.route("/scan-food", methods=["GET"])
+@login_required
+@require_onboarding
+def scan_food():
+    # Posts recognized food directly into /log-food via form POST (no template changes needed)
+    html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scan Food</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    h1{font-size:20px;margin:0 0 6px;}
+    .muted{color:#666;font-size:13px;line-height:1.4}
+    .tabs{display:flex; gap:8px; margin:14px 0;}
+    .tab{flex:1; padding:10px 12px; border-radius:12px; border:1px solid #e6e6ef; background:#fafafe; cursor:pointer; font-weight:600;}
+    .tab.active{background:#eef2ff; border-color:#c7d2fe;}
+    .panel{display:none; margin-top:10px;}
+    .panel.active{display:block;}
+    input[type=file]{width:100%;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
+    .btn.secondary{background:#fff;color:#111827;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
+    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
+    img{max-width:100%; border-radius:12px; border:1px solid #e6e6ef;}
+    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h1>📸 Scan Food</h1>
+        <div class="muted">Snap a photo of the food for a best-guess label, or use OCR for receipts/labels. You’ll confirm before logging.</div>
+      </div>
+      <div class="toplinks">
+        <a class="linkbtn" href="/nutrition">🍎 Nutrition</a>
+        <a class="linkbtn" href="/pep-ai">🤖 Pep AI</a>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" id="tab-photo" type="button">Photo (AI Guess)</button>
+      <button class="tab" id="tab-ocr" type="button">Text (OCR)</button>
+    </div>
+
+    <div class="panel active" id="panel-photo">
+      <div class="box"><div class="muted"><b>Tip:</b> Fill the frame with the food. Good lighting helps.</div></div>
+      <div style="margin-top:10px;">
+        <input id="foodPhoto" type="file" accept="image/*" capture="environment" />
+      </div>
+      <div id="photoPreview" style="margin-top:10px; display:none;">
+        <img id="previewImg" />
+      </div>
+
+      <div class="row">
+        <button class="btn" id="btnGuess" type="button" disabled>🤖 Guess Food</button>
+        <button class="btn secondary" id="btnClear" type="button" disabled>Clear</button>
+      </div>
+
+      <div id="guessBox" class="box" style="display:none;">
+        <div class="muted" style="margin-bottom:6px;"><b>Tap a guess to log:</b></div>
+        <div id="guessChips" class="row"></div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-ocr">
+      <div class="box"><div class="muted"><b>Use OCR</b> for receipts, labels, or written notes (e.g., “apple, 1 medium”).</div></div>
+      <div style="margin-top:10px;">
+        <input id="ocrPhoto" type="file" accept="image/*" capture="environment" />
+      </div>
+      <div class="row">
+        <button class="btn" id="btnOcr" type="button" disabled>🔎 Extract Text</button>
+      </div>
+      <div style="margin-top:10px;">
+        <textarea id="ocrText" placeholder="OCR text will appear here..."></textarea>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnLogOcr" type="button" disabled>✅ Log This Text</button>
+      </div>
+    </div>
+
+    <form id="logFoodForm" method="post" action="/log-food" style="display:none;">
+      <input type="hidden" name="food_description" id="food_description" value="" />
+    </form>
+  </div>
+
+  <!-- TFJS + MobileNet (open source, browser-side) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+
+  <!-- Tesseract.js (open source OCR, browser-side) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <script>
+    const tabPhoto = document.getElementById("tab-photo");
+    const tabOcr   = document.getElementById("tab-ocr");
+    const panelPhoto = document.getElementById("panel-photo");
+    const panelOcr   = document.getElementById("panel-ocr");
+
+    function activate(which){
+      const isPhoto = which === "photo";
+      tabPhoto.classList.toggle("active", isPhoto);
+      tabOcr.classList.toggle("active", !isPhoto);
+      panelPhoto.classList.toggle("active", isPhoto);
+      panelOcr.classList.toggle("active", !isPhoto);
+    }
+    tabPhoto.addEventListener("click", () => activate("photo"));
+    tabOcr.addEventListener("click", () => activate("ocr"));
+
+    // ---- Photo (AI Guess) ----
+    const foodPhoto = document.getElementById("foodPhoto");
+    const preview = document.getElementById("photoPreview");
+    const previewImg = document.getElementById("previewImg");
+    const btnGuess = document.getElementById("btnGuess");
+    const btnClear = document.getElementById("btnClear");
+    const guessBox = document.getElementById("guessBox");
+    const guessChips = document.getElementById("guessChips");
+
+    let model = null;
+    let imgEl = null;
+
+    foodPhoto.addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const url = URL.createObjectURL(file);
+      previewImg.src = url;
+      preview.style.display = "block";
+      btnGuess.disabled = false;
+      btnClear.disabled = false;
+      guessBox.style.display = "none";
+      guessChips.innerHTML = "";
+
+      imgEl = new Image();
+      imgEl.src = url;
+      await new Promise(res => imgEl.onload = res);
+    });
+
+    btnClear.addEventListener("click", () => {
+      foodPhoto.value = "";
+      preview.style.display = "none";
+      btnGuess.disabled = true;
+      btnClear.disabled = true;
+      guessBox.style.display = "none";
+      guessChips.innerHTML = "";
+      imgEl = null;
+    });
+
+    function normalizeLabel(label){
+      label = (label || "").toLowerCase();
+      if (label.includes("apple")) return "apple";
+      if (label.includes("banana")) return "banana";
+      if (label.includes("orange")) return "orange";
+      if (label.includes("egg")) return "egg";
+      if (label.includes("pizza")) return "pizza";
+      if (label.includes("hamburger") || label.includes("cheeseburger")) return "hamburger";
+      return label.split(",")[0].split(" ")[0].trim();
+    }
+
+    btnGuess.addEventListener("click", async () => {
+      if (!imgEl) return;
+
+      btnGuess.disabled = true;
+      btnGuess.textContent = "Loading model...";
+      try{
+        if (!model) model = await mobilenet.load();
+        btnGuess.textContent = "Analyzing...";
+        const preds = await model.classify(imgEl);
+
+        guessChips.innerHTML = "";
+        preds.slice(0,5).forEach(p => {
+          const term = normalizeLabel(p.className);
+          const chip = document.createElement("div");
+          chip.className = "chip";
+          chip.textContent = `${term} (${Math.round(p.probability*100)}%)`;
+          chip.addEventListener("click", () => {
+            document.getElementById("food_description").value = term;
+            document.getElementById("logFoodForm").submit();
+          });
+          guessChips.appendChild(chip);
+        });
+
+        guessBox.style.display = "block";
+      }catch(err){
+        alert("Food guess failed. Try again with better lighting and closer framing.");
+      }finally{
+        btnGuess.disabled = false;
+        btnGuess.textContent = "🤖 Guess Food";
+      }
+    });
+
+    // ---- OCR (Text) ----
+    const ocrPhoto = document.getElementById("ocrPhoto");
+    const btnOcr = document.getElementById("btnOcr");
+    const ocrText = document.getElementById("ocrText");
+    const btnLogOcr = document.getElementById("btnLogOcr");
+
+    ocrPhoto.addEventListener("change", () => {
+      const file = ocrPhoto.files && ocrPhoto.files[0];
+      btnOcr.disabled = !file;
+      btnLogOcr.disabled = true;
+      ocrText.value = "";
+    });
+
+    btnOcr.addEventListener("click", async () => {
+      const file = ocrPhoto.files && ocrPhoto.files[0];
+      if (!file) return;
+
+      btnOcr.disabled = true;
+      btnOcr.textContent = "Running OCR...";
+      try{
+        const { data } = await Tesseract.recognize(file, "eng");
+        const text = (data && data.text) ? data.text.trim() : "";
+        ocrText.value = text;
+        btnLogOcr.disabled = text.length < 2;
+      }catch(err){
+        alert("OCR failed. Try again with brighter lighting and closer focus.");
+      }finally{
+        btnOcr.disabled = false;
+        btnOcr.textContent = "🔎 Extract Text";
+      }
+    });
+
+    btnLogOcr.addEventListener("click", () => {
+      const text = (ocrText.value || "").trim();
+      if (!text) return;
+      document.getElementById("food_description").value = text;
+      document.getElementById("logFoodForm").submit();
+    });
+  </script>
+</body>
+</html>"""
+    return render_template_string(html)
+
+
+@app.route("/scan-peptides", methods=["GET"])
+@login_required
+@require_onboarding
+def scan_peptides():
+    peptides = _load_peptides_list()
+    peptide_names = [p.get("name","") for p in peptides if p.get("name")]
+
+    html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scan Peptides</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    h1{font-size:20px;margin:0 0 6px;}
+    .muted{color:#666;font-size:13px;line-height:1.4}
+    input[type=file]{width:100%;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
+    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
+    .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h1>📦 Scan Peptides</h1>
+        <div class="muted">Take a photo of the box/kit label (handwritten or printed). We’ll extract text and suggest peptide matches.</div>
+      </div>
+      <div class="toplinks">
+        <a class="linkbtn" href="/add-vial">➕ Add Vial</a>
+        <a class="linkbtn" href="/pep-ai">🤖 Pep AI</a>
+      </div>
+    </div>
+
+    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light.</div></div>
+
+    <div style="margin-top:10px;">
+      <input id="pepPhoto" type="file" accept="image/*" capture="environment" />
+    </div>
+
+    <div class="row">
+      <button class="btn" id="btnOcrPep" type="button" disabled>🔎 OCR Label</button>
+    </div>
+
+    <div style="margin-top:10px;">
+      <textarea id="pepText" placeholder="OCR text will appear here..."></textarea>
+    </div>
+
+    <div id="matchBox" class="box" style="display:none;">
+      <div class="muted" style="margin-bottom:6px;"><b>Tap a suggested peptide:</b></div>
+      <div id="matchChips" class="row"></div>
+      <div class="muted" style="margin-top:8px;">This will take you to <b>Add Vial</b> with a reminder to select this peptide.</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script>
+    const peptideNames = {{ peptide_names | tojson }};
+    const pepPhoto = document.getElementById("pepPhoto");
+    const btn = document.getElementById("btnOcrPep");
+    const pepText = document.getElementById("pepText");
+    const matchBox = document.getElementById("matchBox");
+    const matchChips = document.getElementById("matchChips");
+
+    pepPhoto.addEventListener("change", () => {
+      const file = pepPhoto.files && pepPhoto.files[0];
+      btn.disabled = !file;
+      pepText.value = "";
+      matchBox.style.display = "none";
+      matchChips.innerHTML = "";
+    });
+
+    function normalize(s){
+      return (s||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").replace(/\s+/g," ").trim();
+    }
+
+    function scoreMatch(text, name){
+      const t = normalize(text);
+      const n = normalize(name);
+      if (!t || !n) return 0;
+      if (t.includes(n)) return 100;
+      const tset = new Set(t.split(" "));
+      const nset = new Set(n.split(" "));
+      let overlap = 0;
+      for (const tok of nset){ if (tset.has(tok)) overlap++; }
+      return overlap;
+    }
+
+    function buildSuggestions(text){
+      const scored = peptideNames.map(n => ({name:n, score: scoreMatch(text,n)}))
+                                .filter(x => x.score > 0)
+                                .sort((a,b) => b.score - a.score)
+                                .slice(0,8);
+      return scored;
+    }
+
+    btn.addEventListener("click", async () => {
+      const file = pepPhoto.files && pepPhoto.files[0];
+      if (!file) return;
+
+      btn.disabled = true;
+      btn.textContent = "Running OCR...";
+      try{
+        const { data } = await Tesseract.recognize(file, "eng");
+        const text = (data && data.text) ? data.text.trim() : "";
+        pepText.value = text;
+
+        const suggestions = buildSuggestions(text);
+        matchChips.innerHTML = "";
+
+        if (suggestions.length){
+          suggestions.forEach(s => {
+            const chip = document.createElement("div");
+            chip.className = "chip";
+            chip.textContent = s.name;
+            chip.addEventListener("click", () => {
+              const u = new URL(window.location.origin + "/add-vial");
+              u.searchParams.set("suggest_peptide", s.name);
+              window.location.href = u.toString();
+            });
+            matchChips.appendChild(chip);
+          });
+          matchBox.style.display = "block";
+        } else {
+          matchBox.style.display = "block";
+          matchChips.innerHTML = "<div class='muted'>No confident match found — try a closer photo, or just go to Add Vial and select manually.</div>";
+        }
+
+      }catch(err){
+        alert("OCR failed. Try again with brighter lighting and closer focus.");
+      }finally{
+        btn.disabled = false;
+        btn.textContent = "🔎 OCR Label";
+      }
+    });
+  </script>
+</body>
+</html>"""
+    return render_template_string(html, peptide_names=peptide_names)
+
+
+@app.before_request
+def _scan_hint_flash():
+    try:
+        if request.method == "GET" and request.path == "/add-vial":
+            sugg = (request.args.get("suggest_peptide") or "").strip()
+            if sugg:
+                flash(f"Scan suggestion: {sugg}. Please select it below (and enter mg amount).", "info")
+    except Exception:
+        pass
+
+
 @app.route("/")
 def index():
     if "user_id" in session:
@@ -1554,7 +1430,7 @@ def log_food():
             print(f"Calorie Ninja API error: {e}")
             flash("Error connecting to nutrition database. Please try again.", "error")
     
-    return render_if_exists("log_food.html", fallback_endpoint="nutrition", prefill=(request.args.get("q") or ""))
+    return render_if_exists("log_food.html", fallback_endpoint="nutrition")
 
 @app.route("/delete-food/<int:food_id>", methods=["POST"])
 @login_required
