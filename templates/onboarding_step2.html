@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Setup (Step 2) - PeptideTracker.ai{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 720px;">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="mb-0">Quick Setup</h2>
+    <span class="badge text-bg-primary">Step 2 of 2</span>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <p class="text-muted mb-3">A couple more basics — then you’re in.</p>
+
+      <form method="post">
+        {% set age = profile.get('age_range','') if profile else '' %}
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Age range <span class="text-danger">*</span></label>
+          <select class="form-select" name="age_range" required>
+            <option value="" {% if not age %}selected{% endif %} disabled>Select one…</option>
+            {% for a in ['18-24','25-34','35-44','45-54','55-64','65+'] %}
+              <option value="{{ a }}" {% if age==a %}selected{% endif %}>{{ a }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {% set td = profile.get('training_days', '') if profile else '' %}
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Training days per week <span class="text-danger">*</span></label>
+          <input class="form-control" type="number" name="training_days" min="0" max="7" value="{{ td }}" required>
+          <div class="form-text">0–7</div>
+        </div>
+
+        <div class="d-flex justify-content-between">
+          <a class="btn btn-outline-secondary" href="{{ url_for('onboarding_step1') }}">Back</a>
+          <button class="btn btn-primary" type="submit">Finish Setup</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
