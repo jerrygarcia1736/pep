@@ -377,27 +377,13 @@ def has_accepted_disclaimer(user_id: int) -> bool:
         db.close()
 
 def require_onboarding(view_func):
-    """Optional onboarding decorator - shows warnings but doesn't block users"""
+    """No-op decorator - onboarding is now completely optional"""
     @wraps(view_func)
     def wrapper(*args, **kwargs):
-        u = get_current_user()
-        if not u:
+        # Just verify user is logged in
+        if "user_id" not in session:
             return redirect(url_for("login"))
-        
-        # Make onboarding OPTIONAL - don't block users
-        # This fixes mobile login issues
-        try:
-            # Step 1: profile (optional - just show message)
-            if not is_profile_complete(u.id) and request.endpoint == "dashboard":
-                flash("💡 Complete your profile to unlock personalized AI features!", "info")
-            
-            # Step 2: disclaimer (optional - just show message)  
-            if is_profile_complete(u.id) and not has_accepted_disclaimer(u.id) and request.endpoint == "dashboard":
-                flash("⚠️ Please acknowledge our medical disclaimer.", "warning")
-        except Exception as e:
-            # Never block users due to onboarding errors
-            print(f"Onboarding check error (non-blocking): {e}")
-        
+        # No onboarding checks - let users access everything
         return view_func(*args, **kwargs)
     return wrapper
 
@@ -1045,8 +1031,20 @@ def logout():
 @login_required
 @require_onboarding
 def dashboard():
+    """Dashboard with safe profile loading"""
     stats, protocols, recent_injections = _compute_dashboard_context()
-    profile = get_user_profile(session["user_id"])
+    
+    # Safely get profile (may not exist yet)
+    try:
+        profile = get_user_profile(session["user_id"])
+    except Exception as e:
+        print(f"Profile load error (non-fatal): {e}")
+        profile = None
+    
+    # Add helpful banner if profile not complete
+    if not profile or not getattr(profile, 'completed_at', None):
+        flash("💡 Tip: Complete your profile to unlock personalized features!", "info")
+    
     return render_if_exists(
         "dashboard.html",
         fallback_endpoint="index",
