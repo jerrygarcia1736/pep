@@ -16,6 +16,9 @@ python-dotenv==1.0.1
 # Production server
 gunicorn==23.0.0
 
+# Lightweight image support (required by app.py: from PIL import Image)
+pillow==11.1.0
+
 # NOTE:
-# OCR is handled client-side in the browser via Tesseract.js (no server OCR deps needed),
-# which dramatically speeds up Render deploys.
+# OCR is handled client-side in the browser via Tesseract.js
+# Heavy server-side OCR deps (easyocr, opencv, numpy) intentionally removed
