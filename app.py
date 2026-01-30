@@ -1295,59 +1295,46 @@ def _skip_profile_alias():
 @app.route("/profile-setup", methods=["GET", "POST"])
 @login_required
 def profile_setup():
-    """User profile setup/edit page"""
+    """Profile setup (optional).
+
+    This page is intentionally lightweight on mobile:
+    - Users can skip at any time
+    - The minimal profile captures only 'goals' for Pep AI personalization
+    """
     db = get_session(db_url)
     try:
         profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
-        
+
         if request.method == "POST":
-            age = request.form.get("age")
-            weight_lbs = request.form.get("weight_lbs")
-            height_inches = request.form.get("height_inches")
-            gender = request.form.get("gender")
-            goals = request.form.getlist("goals")
-            experience_level = request.form.get("experience_level")
-            medical_notes = request.form.get("medical_notes", "").strip()
-            
-            if not all([age, weight_lbs, height_inches, gender, experience_level]):
-                flash("Please fill in all required fields.", "error")
-                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
-            
+            # Allow skip immediately (matches the template's submit button)
+            if (request.form.get("action") or "").strip().lower() == "skip":
+                return redirect(url_for("profile_skip"))
+
+            goals = request.form.getlist("goals") or []
+
             if not goals:
-                flash("Please select at least one goal.", "error")
+                flash("Please select at least one goal (or tap Skip for now).", "warning")
                 return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
-            
+
             if profile:
-                profile.age = int(age)
-                profile.weight_lbs = float(weight_lbs)
-                profile.height_inches = int(height_inches)
-                profile.gender = gender
                 profile.goals = json.dumps(goals)
-                profile.experience_level = experience_level
-                profile.medical_notes = medical_notes
                 profile.completed_at = datetime.utcnow()
                 profile.updated_at = datetime.utcnow()
-                flash("Profile updated successfully!", "success")
+                flash("Profile saved.", "success")
             else:
                 profile = UserProfile(
                     user_id=session["user_id"],
-                    age=int(age),
-                    weight_lbs=float(weight_lbs),
-                    height_inches=int(height_inches),
-                    gender=gender,
                     goals=json.dumps(goals),
-                    experience_level=experience_level,
-                    medical_notes=medical_notes,
-                    completed_at=datetime.utcnow()
+                    completed_at=datetime.utcnow(),
                 )
                 db.add(profile)
-                flash("Profile created successfully!", "success")
-            
+                flash("Profile saved.", "success")
+
             db.commit()
             return redirect(url_for("dashboard"))
-        
+
         return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
-        
+
     finally:
         db.close()
 
