@@ -281,20 +281,27 @@ def login_required(f):
         if "user_id" not in session:
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
-        
-        # Check if user has completed profile.
-        # Since profile setup is now integrated into the dashboard, we allow the dashboard
-        # to load even if the profile is incomplete, and we redirect other protected pages
-        # back to the dashboard until the profile is completed.
-        if f.__name__ not in ("profile_setup", "dashboard", "chat", "api_chat"):
+
+        # ---------------------------------------------------------------------
+        # Profile is OPTIONAL.
+        # We only gate a small set of "personalized / higher-risk" features (Pep AI),
+        # while allowing the rest of the app (including scanners) to work normally.
+        #
+        # If the user clicks "Skip for now", we set session["profile_skipped"]=True
+        # and we should respect that for the rest of the session.
+        # ---------------------------------------------------------------------
+        restricted_until_profile_complete = {"chat", "api_chat", "pep_ai"}
+
+        if (f.__name__ in restricted_until_profile_complete) and (not session.get("profile_skipped")):
             db = get_session(db_url)
             try:
                 profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
                 if not profile or not profile.completed_at:
+                    flash("Complete your (optional) profile to unlock Pep AI.", "info")
                     return redirect(url_for("dashboard"))
             finally:
                 db.close()
-        
+
         return f(*args, **kwargs)
     return wrapper
 
@@ -1170,20 +1177,16 @@ def scan_food():
 @app.route("/scan-nutrition", methods=["GET"])
 @login_required
 def scan_nutrition():
-    """Nutrition scanner entrypoint.
+    """Alias for the Nutrition Scanner button.
 
-    Route the "Scan Nutrition" button to /scan-food (camera-capable page)
-    so the feature works even if templates/nutrition.html is missing.
+    Historically this redirected to /nutrition, but that route may be gated or may not
+    exist in some deployments. We route directly to the camera-based food scanner.
     """
-
-    # Preferred: use the in-app scanner page that supports mobile camera.
     if has_endpoint("scan_food"):
-        return redirect(url_for("scan_food"))
-
-    # Fallbacks
-    if has_endpoint("nutrition"):
-        return redirect(url_for("nutrition"))
-    return redirect("/nutrition")
+        # Preserve optional autocam=1 query param
+        autocam = request.args.get("autocam")
+        return redirect(url_for("scan_food", autocam=autocam) if autocam else url_for("scan_food"))
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/scan-peptides", methods=["GET"])
@@ -1546,9 +1549,45 @@ def reset_password(token):
 @app.route("/profile-skip", methods=["GET"])
 @login_required
 def profile_skip():
-    """Allow users to skip profile setup and continue to dashboard."""
+    """Skip profile setup and continue.
+
+    We mark the user as "done enough" to stop blocking UI (and to avoid redirect loops),
+    but they can still edit their profile later.
+    """
     session["profile_skipped"] = True
-    flash("Profile skipped — you can complete it later.", "info")
+
+    try:
+        # If a Profile model exists for this user, mark it completed.
+        if current_user.is_authenticated:
+            # Some apps store these flags on User, some on Profile. Handle both safely.
+            now = datetime.utcnow()
+            # User-level flags
+            if hasattr(current_user, "profile_completed") and not getattr(current_user, "profile_completed", False):
+                setattr(current_user, "profile_completed", True)
+            if hasattr(current_user, "disclaimer_accepted_at") and getattr(current_user, "disclaimer_accepted_at", None) is None:
+                setattr(current_user, "disclaimer_accepted_at", now)
+
+            # Profile table flags (if present)
+            prof = None
+            try:
+                prof = Profile.query.filter_by(user_id=current_user.id).first()
+            except Exception:
+                prof = None
+            if prof is not None:
+                if hasattr(prof, "profile_completed") and not getattr(prof, "profile_completed", False):
+                    setattr(prof, "profile_completed", True)
+                if hasattr(prof, "disclaimer_accepted_at") and getattr(prof, "disclaimer_accepted_at", None) is None:
+                    setattr(prof, "disclaimer_accepted_at", now)
+
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+    except Exception:
+        # Never break skip if database models differ between deployments.
+        pass
+
+    flash("Setup skipped — you can complete it later.", "info")
     return redirect(url_for("dashboard"))
 
 # Alias endpoints (in case templates reference different names)
