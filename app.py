@@ -281,20 +281,27 @@ def login_required(f):
         if "user_id" not in session:
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
-        
-        # Check if user has completed profile.
-        # Since profile setup is now integrated into the dashboard, we allow the dashboard
-        # to load even if the profile is incomplete, and we redirect other protected pages
-        # back to the dashboard until the profile is completed.
-        if f.__name__ not in ("profile_setup", "dashboard", "chat", "api_chat"):
+
+        # ---------------------------------------------------------------------
+        # Profile is OPTIONAL.
+        # We only gate a small set of "personalized / higher-risk" features (Pep AI),
+        # while allowing the rest of the app (including scanners) to work normally.
+        #
+        # If the user clicks "Skip for now", we set session["profile_skipped"]=True
+        # and we should respect that for the rest of the session.
+        # ---------------------------------------------------------------------
+        restricted_until_profile_complete = {"chat", "api_chat", "pep_ai"}
+
+        if (f.__name__ in restricted_until_profile_complete) and (not session.get("profile_skipped")):
             db = get_session(db_url)
             try:
                 profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
                 if not profile or not profile.completed_at:
+                    flash("Complete your (optional) profile to unlock Pep AI.", "info")
                     return redirect(url_for("dashboard"))
             finally:
                 db.close()
-        
+
         return f(*args, **kwargs)
     return wrapper
 
@@ -2680,9 +2687,3 @@ def api_injection_confidence():
         result.pop("debug", None)
     return jsonify(result)
 
-
-# --- Alias to satisfy templates expecting profile_setup_skip ---
-@app.route("/profile-setup/skip", methods=["GET"], endpoint="profile_setup_skip")
-@login_required
-def _profile_setup_skip_alias():
-    return redirect(url_for("profile_skip"))
