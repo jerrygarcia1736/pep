@@ -39,8 +39,7 @@ from nutrition_api import register_nutrition_routes
 # -----------------------------------------------------------------------------
 # Flask app
 # -----------------------------------------------------------------------------
-app = Flask(
-
+app = Flask(__name__)
 # -----------------------------------------------------------------------------
 # Food scanning configuration (used by /scan-food and /api/* endpoints)
 # -----------------------------------------------------------------------------
@@ -173,8 +172,6 @@ def _openai_identify_food_from_image(image_b64: str) -> dict:
         return json.loads(content)
     except Exception as e:
         return {"error": str(e)}
-
-__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
 # Jinja filter for parsing JSON in templates
@@ -937,8 +934,6 @@ def scan_peptides():
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
-
-        pass
 
 
 @app.route("/")
