@@ -742,12 +742,437 @@ def api_food_photo_identify():
     status = 200 if "error" not in result else 500
     return jsonify(result), status
 
-
 @app.route("/scan-food", methods=["GET"])
 @login_required
 def scan_food():
-    """Food scanning page using new template"""
-    return render_template("scan_food.html", title="Scan Food")
+    # Posts recognized food directly into /log-food via form POST (no template changes needed)
+    html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scan Food</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    h1{font-size:20px;margin:0 0 6px;}
+    .muted{color:#666;font-size:13px;line-height:1.4}
+    .tabs{display:flex; gap:8px; margin:14px 0;}
+    .tab{flex:1; padding:10px 12px; border-radius:12px; border:1px solid #e6e6ef; background:#fafafe; cursor:pointer; font-weight:600;}
+    .tab.active{background:#eef2ff; border-color:#c7d2fe;}
+    .panel{display:none; margin-top:10px;}
+    .panel.active{display:block;}
+    input[type=file]{width:100%;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
+    .btn.secondary{background:#fff;color:#111827;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
+    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
+    img{max-width:100%; border-radius:12px; border:1px solid #e6e6ef;}
+    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h1>📸 Scan Food</h1>
+        <div class="muted">Snap a photo of the food for a best-guess label, or use OCR for receipts/labels. You’ll confirm before logging.</div>
+      </div>
+      <div class="toplinks">
+        <a class="linkbtn" href="/nutrition">🍎 Nutrition</a>
+        <a class="linkbtn" href="/pep-ai">🤖 Pep AI</a>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" id="tab-photo" type="button">Photo (AI Guess)</button>
+      <button class="tab" id="tab-ocr" type="button">Text (OCR)</button>
+    </div>
+
+    <div class="panel active" id="panel-photo">
+      <div class="box"><div class="muted"><b>Tip:</b> Fill the frame with the food. Good lighting helps.</div></div>
+      <div style="margin-top:10px;">
+        <input id="foodPhoto" type="file" accept="image/*" capture="environment" capture="environment" />
+      
+          <div class="mt-3">
+            <div class="d-flex flex-wrap gap-2">
+              <button type="button" class="btn btn-outline-primary" id="openFoodCameraBtn">
+                <i class="bi bi-camera"></i> Use Camera
+              </button>
+              <button type="button" class="btn btn-outline-secondary d-none" id="captureFoodFrameBtn">
+                <i class="bi bi-circle-fill"></i> Capture Photo
+              </button>
+              <button type="button" class="btn btn-outline-danger d-none" id="stopFoodCameraBtn">
+                <i class="bi bi-x-circle"></i> Stop
+              </button>
+            </div>
+
+            <div class="mt-3 d-none" id="foodCameraWrap">
+              <video id="foodCameraStream" playsinline autoplay class="w-100 rounded border"></video>
+              <canvas id="foodCameraCanvas" class="d-none"></canvas>
+            </div>
+          </div>
+</div>
+      <div id="photoPreview" style="margin-top:10px; display:none;">
+        <img id="previewImg" />
+      </div>
+
+      <div class="row">
+        <button class="btn" id="btnGuess" type="button" disabled>🤖 Guess Food</button>
+        <button class="btn secondary" id="btnClear" type="button" disabled>Clear</button>
+      </div>
+
+      <div id="guessBox" class="box" style="display:none;">
+        <div class="muted" style="margin-bottom:6px;"><b>Tap a guess to log:</b></div>
+        <div id="guessChips" class="row"></div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-ocr">
+      <div class="box"><div class="muted"><b>Use OCR</b> for receipts, labels, or written notes (e.g., “apple, 1 medium”).</div></div>
+      <div style="margin-top:10px;">
+        <input id="ocrPhoto" type="file" accept="image/*" capture="environment" />
+      </div>
+      <div class="row">
+        <button class="btn" id="btnOcr" type="button" disabled>🔎 Extract Text</button>
+      </div>
+      <div style="margin-top:10px;">
+        <textarea id="ocrText" placeholder="OCR text will appear here..."></textarea>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnLogOcr" type="button" disabled>✅ Log This Text</button>
+      </div>
+    </div>
+
+    <form id="logFoodForm" method="post" action="/log-food" style="display:none;">
+      <input type="hidden" name="food_description" id="food_description" value="" />
+    </form>
+  </div>
+
+  <!-- TFJS + MobileNet (open source, browser-side) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js">
+      // --- Mobile camera support (direct capture) ---
+      let cameraStream = null;
+
+      async function startCamera() {
+        const wrap = document.getElementById('cameraWrap');
+        const video = document.getElementById('cameraStream');
+        const openBtn = document.getElementById('openCameraBtn');
+        const capBtn = document.getElementById('captureFrameBtn');
+        const stopBtn = document.getElementById('stopCameraBtn');
+
+        try {
+          cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false
+          });
+          video.srcObject = cameraStream;
+          wrap.classList.remove('d-none');
+          capBtn.classList.remove('d-none');
+          stopBtn.classList.remove('d-none');
+          openBtn.classList.add('d-none');
+        } catch (e) {
+          console.error(e);
+          alert("Could not access camera. You can still use the Upload Photo option.");
+        }
+      }
+
+      function stopCamera() {
+        const wrap = document.getElementById('cameraWrap');
+        const openBtn = document.getElementById('openCameraBtn');
+        const capBtn = document.getElementById('captureFrameBtn');
+        const stopBtn = document.getElementById('stopCameraBtn');
+        const video = document.getElementById('cameraStream');
+
+        if (cameraStream) {
+          cameraStream.getTracks().forEach(t => t.stop());
+          cameraStream = null;
+        }
+        video.srcObject = null;
+        wrap.classList.add('d-none');
+        capBtn.classList.add('d-none');
+        stopBtn.classList.add('d-none');
+        openBtn.classList.remove('d-none');
+      }
+
+      function capturePhotoToFileInput() {
+        const video = document.getElementById('cameraStream');
+        const canvas = document.getElementById('cameraCanvas');
+        const input = document.getElementById('peptidePhoto');
+
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+
+        canvas.toBlob(blob => {
+          if (!blob) return;
+          // Create a File and set it to the file input so existing OCR flow works.
+          const file = new File([blob], "camera.jpg", { type: "image/jpeg" });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+
+          // Trigger the same handler as upload selection.
+          const evt = new Event('change', { bubbles: true });
+          input.dispatchEvent(evt);
+
+          stopCamera();
+        }, "image/jpeg", 0.92);
+      }
+
+      document.getElementById('openCameraBtn')?.addEventListener('click', startCamera);
+      document.getElementById('stopCameraBtn')?.addEventListener('click', stopCamera);
+      document.getElementById('captureFrameBtn')?.addEventListener('click', capturePhotoToFileInput);
+      // Auto-open camera ONLY when arriving via nav click (?autocam=1) and only once per session for this page.
+      window.addEventListener('DOMContentLoaded', () => {
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches;
+        if (!isMobile) return;
+
+        const params = new URLSearchParams(window.location.search);
+        const wantsAuto = params.get('autocam') === '1';
+        if (!wantsAuto) return;
+
+        const key = 'autocam_once:/scan-peptides';
+        if (sessionStorage.getItem(key) === '1') return;
+
+        // Mark as used and remove the query param so refresh/back won't retrigger.
+        sessionStorage.setItem(key, '1');
+        try {
+          params.delete('autocam');
+          const newUrl = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '') + window.location.hash;
+          history.replaceState(null, '', newUrl);
+        } catch (e) {}
+
+        setTimeout(() => { startCamera(); }, 350);
+      });
+// --- Mobile camera support (direct capture) for Food ---
+      let foodCameraStreamObj = null;
+
+      async function startFoodCamera() {
+        const wrap = document.getElementById('foodCameraWrap');
+        const video = document.getElementById('foodCameraStream');
+        const openBtn = document.getElementById('openFoodCameraBtn');
+        const capBtn = document.getElementById('captureFoodFrameBtn');
+        const stopBtn = document.getElementById('stopFoodCameraBtn');
+
+        try {
+          foodCameraStreamObj = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false
+          });
+          video.srcObject = foodCameraStreamObj;
+          wrap.classList.remove('d-none');
+          capBtn.classList.remove('d-none');
+          stopBtn.classList.remove('d-none');
+          openBtn.classList.add('d-none');
+        } catch (e) {
+          console.error(e);
+          alert("Could not access camera. You can still use the Upload Photo option.");
+        }
+      }
+
+      function stopFoodCamera() {
+        const wrap = document.getElementById('foodCameraWrap');
+        const openBtn = document.getElementById('openFoodCameraBtn');
+        const capBtn = document.getElementById('captureFoodFrameBtn');
+        const stopBtn = document.getElementById('stopFoodCameraBtn');
+        const video = document.getElementById('foodCameraStream');
+
+        if (foodCameraStreamObj) {
+          foodCameraStreamObj.getTracks().forEach(t => t.stop());
+          foodCameraStreamObj = null;
+        }
+        video.srcObject = null;
+        wrap.classList.add('d-none');
+        capBtn.classList.add('d-none');
+        stopBtn.classList.add('d-none');
+        openBtn.classList.remove('d-none');
+      }
+
+      function captureFoodPhotoToFileInput() {
+        const video = document.getElementById('foodCameraStream');
+        const canvas = document.getElementById('foodCameraCanvas');
+        const input = document.getElementById('foodPhoto');
+
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+
+        canvas.toBlob(blob => {
+          if (!blob) return;
+          const file = new File([blob], "food_camera.jpg", { type: "image/jpeg" });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+
+          const evt = new Event('change', { bubbles: true });
+          input.dispatchEvent(evt);
+
+          stopFoodCamera();
+        }, "image/jpeg", 0.92);
+      }
+
+      document.getElementById('openFoodCameraBtn')?.addEventListener('click', startFoodCamera);
+      document.getElementById('stopFoodCameraBtn')?.addEventListener('click', stopFoodCamera);
+      document.getElementById('captureFoodFrameBtn')?.addEventListener('click', captureFoodPhotoToFileInput);
+    
+</script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+
+  <!-- Tesseract.js (open source OCR, browser-side) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <script>
+    const tabPhoto = document.getElementById("tab-photo");
+    const tabOcr   = document.getElementById("tab-ocr");
+    const panelPhoto = document.getElementById("panel-photo");
+    const panelOcr   = document.getElementById("panel-ocr");
+
+    function activate(which){
+      const isPhoto = which === "photo";
+      tabPhoto.classList.toggle("active", isPhoto);
+      tabOcr.classList.toggle("active", !isPhoto);
+      panelPhoto.classList.toggle("active", isPhoto);
+      panelOcr.classList.toggle("active", !isPhoto);
+    }
+    tabPhoto.addEventListener("click", () => activate("photo"));
+    tabOcr.addEventListener("click", () => activate("ocr"));
+
+    // ---- Photo (AI Guess) ----
+    const foodPhoto = document.getElementById("foodPhoto");
+    const preview = document.getElementById("photoPreview");
+    const previewImg = document.getElementById("previewImg");
+    const btnGuess = document.getElementById("btnGuess");
+    const btnClear = document.getElementById("btnClear");
+    const guessBox = document.getElementById("guessBox");
+    const guessChips = document.getElementById("guessChips");
+
+    let model = null;
+    let imgEl = null;
+
+    foodPhoto.addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const url = URL.createObjectURL(file);
+      previewImg.src = url;
+      preview.style.display = "block";
+      btnGuess.disabled = false;
+      btnClear.disabled = false;
+      guessBox.style.display = "none";
+      guessChips.innerHTML = "";
+
+      imgEl = new Image();
+      imgEl.src = url;
+      await new Promise(res => imgEl.onload = res);
+    });
+
+    btnClear.addEventListener("click", () => {
+      foodPhoto.value = "";
+      preview.style.display = "none";
+      btnGuess.disabled = true;
+      btnClear.disabled = true;
+      guessBox.style.display = "none";
+      guessChips.innerHTML = "";
+      imgEl = null;
+    });
+
+    function normalizeLabel(label){
+      label = (label || "").toLowerCase();
+      if (label.includes("apple")) return "apple";
+      if (label.includes("banana")) return "banana";
+      if (label.includes("orange")) return "orange";
+      if (label.includes("egg")) return "egg";
+      if (label.includes("pizza")) return "pizza";
+      if (label.includes("hamburger") || label.includes("cheeseburger")) return "hamburger";
+      return label.split(",")[0].split(" ")[0].trim();
+    }
+
+    btnGuess.addEventListener("click", async () => {
+      if (!imgEl) return;
+
+      btnGuess.disabled = true;
+      btnGuess.textContent = "Loading model...";
+      try{
+        if (!model) model = await mobilenet.load();
+        btnGuess.textContent = "Analyzing...";
+        const preds = await model.classify(imgEl);
+
+        guessChips.innerHTML = "";
+        preds.slice(0,5).forEach(p => {
+          const term = normalizeLabel(p.className);
+          const chip = document.createElement("div");
+          chip.className = "chip";
+          chip.textContent = `${term} (${Math.round(p.probability*100)}%)`;
+          chip.addEventListener("click", () => {
+            document.getElementById("food_description").value = term;
+            document.getElementById("logFoodForm").submit();
+          });
+          guessChips.appendChild(chip);
+        });
+
+        guessBox.style.display = "block";
+      }catch(err){
+        alert("Food guess failed. Try again with better lighting and closer framing.");
+      }finally{
+        btnGuess.disabled = false;
+        btnGuess.textContent = "🤖 Guess Food";
+      }
+    });
+
+    // ---- OCR (Text) ----
+    const ocrPhoto = document.getElementById("ocrPhoto");
+    const btnOcr = document.getElementById("btnOcr");
+    const ocrText = document.getElementById("ocrText");
+    const btnLogOcr = document.getElementById("btnLogOcr");
+
+    ocrPhoto.addEventListener("change", () => {
+      const file = ocrPhoto.files && ocrPhoto.files[0];
+      btnOcr.disabled = !file;
+      btnLogOcr.disabled = true;
+      ocrText.value = "";
+    });
+
+    btnOcr.addEventListener("click", async () => {
+      const file = ocrPhoto.files && ocrPhoto.files[0];
+      if (!file) return;
+
+      btnOcr.disabled = true;
+      btnOcr.textContent = "Running OCR...";
+      try{
+        const { data } = await Tesseract.recognize(file, "eng");
+        const text = (data && data.text) ? data.text.trim() : "";
+        ocrText.value = text;
+        btnLogOcr.disabled = text.length < 2;
+      }catch(err){
+        alert("OCR failed. Try again with brighter lighting and closer focus.");
+      }finally{
+        btnOcr.disabled = false;
+        btnOcr.textContent = "🔎 Extract Text";
+      }
+    });
+
+    btnLogOcr.addEventListener("click", () => {
+      const text = (ocrText.value || "").trim();
+      if (!text) return;
+      document.getElementById("food_description").value = text;
+      document.getElementById("logFoodForm").submit();
+    });
+  </script>
+</body>
+</html>"""
+    return render_template_string(html)
+
+
 
 @app.route("/scan-nutrition", methods=["GET"])
 @login_required
@@ -764,12 +1189,163 @@ def scan_nutrition():
     return redirect(url_for("dashboard"))
 
 
-
 @app.route("/scan-peptides", methods=["GET"])
 @login_required
 def scan_peptides():
-    """Peptide scanning page using new template"""
-    return render_template("scan_peptides.html", title="Scan Peptides")
+    peptides = _load_peptides_list()
+    peptide_names = [p.get("name","") for p in peptides if p.get("name")]
+
+    html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scan Peptides</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    h1{font-size:20px;margin:0 0 6px;}
+    .muted{color:#666;font-size:13px;line-height:1.4}
+    input[type=file]{width:100%;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
+    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
+    .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h1>📦 Scan Peptides</h1>
+        <div class="muted">Take a photo of the box/kit label (handwritten or printed). We’ll extract text and suggest peptide matches.</div>
+      </div>
+      <div class="toplinks">
+        <a class="linkbtn" href="/add-vial">➕ Add Vial</a>
+        <a class="linkbtn" href="/pep-ai">🤖 Pep AI</a>
+      </div>
+    </div>
+
+    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light.</div></div>
+
+    <div style="margin-top:10px;">
+      <input id="pepPhoto" type="file" accept="image/*" capture="environment" />
+    </div>
+
+    <div class="row">
+      <button class="btn" id="btnOcrPep" type="button" disabled>🔎 OCR Label</button>
+    </div>
+
+    <div style="margin-top:10px;">
+      <textarea id="pepText" placeholder="OCR text will appear here..."></textarea>
+    </div>
+
+    <div id="matchBox" class="box" style="display:none;">
+      <div class="muted" style="margin-bottom:6px;"><b>Tap a suggested peptide:</b></div>
+      <div id="matchChips" class="row"></div>
+      <div class="muted" style="margin-top:8px;">This will take you to <b>Add Vial</b> with a reminder to select this peptide.</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script>
+    const peptideNames = {{ peptide_names | tojson }};
+    const pepPhoto = document.getElementById("pepPhoto");
+    const btn = document.getElementById("btnOcrPep");
+    const pepText = document.getElementById("pepText");
+    const matchBox = document.getElementById("matchBox");
+    const matchChips = document.getElementById("matchChips");
+
+    pepPhoto.addEventListener("change", () => {
+      const file = pepPhoto.files && pepPhoto.files[0];
+      btn.disabled = !file;
+      pepText.value = "";
+      matchBox.style.display = "none";
+      matchChips.innerHTML = "";
+    });
+
+    function normalize(s){
+      return (s||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").replace(/\s+/g," ").trim();
+    }
+
+    function scoreMatch(text, name){
+      const t = normalize(text);
+      const n = normalize(name);
+      if (!t || !n) return 0;
+      if (t.includes(n)) return 100;
+      const tset = new Set(t.split(" "));
+      const nset = new Set(n.split(" "));
+      let overlap = 0;
+      for (const tok of nset){ if (tset.has(tok)) overlap++; }
+      return overlap;
+    }
+
+    function buildSuggestions(text){
+      const scored = peptideNames.map(n => ({name:n, score: scoreMatch(text,n)}))
+                                .filter(x => x.score > 0)
+                                .sort((a,b) => b.score - a.score)
+                                .slice(0,8);
+      return scored;
+    }
+
+    btn.addEventListener("click", async () => {
+      const file = pepPhoto.files && pepPhoto.files[0];
+      if (!file) return;
+
+      btn.disabled = true;
+      btn.textContent = "Running OCR...";
+      try{
+        const { data } = await Tesseract.recognize(file, "eng");
+        const text = (data && data.text) ? data.text.trim() : "";
+        pepText.value = text;
+
+        const suggestions = buildSuggestions(text);
+        matchChips.innerHTML = "";
+
+        if (suggestions.length){
+          suggestions.forEach(s => {
+            const chip = document.createElement("div");
+            chip.className = "chip";
+            chip.textContent = s.name;
+            chip.addEventListener("click", () => {
+              const u = new URL(window.location.origin + "/add-vial");
+              u.searchParams.set("suggest_peptide", s.name);
+              window.location.href = u.toString();
+            });
+            matchChips.appendChild(chip);
+          });
+          matchBox.style.display = "block";
+        } else {
+          matchBox.style.display = "block";
+          matchChips.innerHTML = "<div class='muted'>No confident match found — try a closer photo, or just go to Add Vial and select manually.</div>";
+        }
+
+      }catch(err){
+        alert("OCR failed. Try again with brighter lighting and closer focus.");
+      }finally{
+        btn.disabled = false;
+        btn.textContent = "🔎 OCR Label";
+      }
+    });
+  </script>
+</body>
+</html>"""
+    return render_template_string(html, peptide_names=peptide_names)
+
+
+@app.before_request
+def _scan_hint_flash():
+    try:
+        if request.method == "GET" and request.path == "/add-vial":
+            sugg = (request.args.get("suggest_peptide") or "").strip()
+            if sugg:
+                flash(f"Scan suggestion: {sugg}. Please select it below (and enter mg amount).", "info")
+    except Exception:
+        pass
+
 
 @app.route("/")
 def index():
