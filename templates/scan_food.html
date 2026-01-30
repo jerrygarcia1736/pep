@@ -205,13 +205,27 @@ let selectedFood = null;
 let baseMacros = null;
 
 // Start camera
-btnStartCamera.addEventListener('click', async () => {
+async function startCamera() {
     try {
         cameraStream = await navigator.mediaDevices.getUserMedia({ 
             video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } 
         });
         
         cameraVideo.srcObject = cameraStream;
+        cameraPlaceholder.style.display = 'none';
+        cameraVideo.style.display = 'block';
+        btnStartCamera.style.display = 'none';
+        btnCapture.style.display = 'block';
+    } catch (error) {
+        console.error('Camera error:', error);
+        alert('Could not access camera. Please check permissions or use photo upload instead.');
+    }
+}
+
+btnStartCamera.addEventListener('click', startCamera);
+
+// Start camera
+cameraVideo.srcObject = cameraStream;
         cameraPlaceholder.style.display = 'none';
         cameraVideo.style.display = 'block';
         btnStartCamera.style.display = 'none';
@@ -366,14 +380,14 @@ function createFoodOptionCard(food, index) {
         </div>
     `;
     
-    card.addEventListener('click', () => selectFood(food));
+    card.addEventListener('click', () => selectFood(food, card));
     
     col.appendChild(card);
     return col;
 }
 
 // Select a food option
-function selectFood(food) {
+function selectFood(food, el) {
     selectedFood = food;
     baseMacros = {
         calories: food.calories,
@@ -386,7 +400,7 @@ function selectFood(food) {
     document.querySelectorAll('.food-option-card').forEach(card => {
         card.classList.remove('border-primary', 'border-3');
     });
-    event.currentTarget.classList.add('border-primary', 'border-3');
+    if (el) el.classList.add('border-primary', 'border-3');
     
     // Update details
     updateSelectedFoodDisplay(1);
@@ -472,6 +486,27 @@ document.getElementById('btnLogFood').addEventListener('click', async () => {
 // Scan another
 document.getElementById('btnScanAnother').addEventListener('click', () => {
     btnRetake.click();
+});
+
+// Auto-open camera ONLY when arriving via nav click (?autocam=1) and only once per session.
+window.addEventListener('DOMContentLoaded', () => {
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches;
+    if (!isMobile) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('autocam') !== '1') return;
+
+    const key = 'autocam_once:/scan-food';
+    if (sessionStorage.getItem(key) === '1') return;
+    sessionStorage.setItem(key, '1');
+
+    try {
+        params.delete('autocam');
+        const newUrl = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '') + window.location.hash;
+        history.replaceState(null, '', newUrl);
+    } catch (e) {}
+
+    setTimeout(() => { startCamera(); }, 350);
 });
 </script>
 
