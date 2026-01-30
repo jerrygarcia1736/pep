@@ -484,8 +484,8 @@ PROTOCOL_TEMPLATES: dict[str, dict[str, str]] = {
 @app.route("/scan-food", methods=["GET"])
 @login_required
 def scan_food():
-    # iOS-friendly: use file input with capture="environment" which opens the native camera.
-    # This avoids getUserMedia issues on mobile Safari.
+    # iOS-friendly camera + higher OCR accuracy via crop + preprocessing.
+    # Posts into /log-food via existing form fields (food_description).
     html = """<!doctype html>
 <html>
 <head>
@@ -493,97 +493,354 @@ def scan_food():
   <title>Scan Food</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
-    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:860px; margin:0 auto;}
     h1{font-size:20px;margin:0 0 6px;}
     .muted{color:#666;font-size:13px;line-height:1.4}
     input[type=file]{width:100%;}
-    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:800; cursor:pointer;}
     .btn.secondary{background:#fff;color:#111827;}
     .btn:disabled{opacity:.5;cursor:not-allowed;}
     .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
     .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
-    img{max-width:100%; border-radius:12px; border:1px solid #e6e6ef;}
-    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    textarea{width:100%; min-height:110px; padding:10px; border-radius:12px; border:1px solid #e6e6ef; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;}
+    .grid{display:grid; grid-template-columns:1fr; gap:12px; margin-top:12px;}
+    @media(min-width:900px){ .grid{grid-template-columns: 1.2fr .8fr;} }
+    .canvasWrap{position:relative; width:100%; border-radius:12px; overflow:hidden; border:1px solid #e6e6ef; background:#fff;}
+    canvas{width:100%; height:auto; display:block; touch-action:none;}
+    .help{display:grid; gap:6px; margin-top:10px;}
+    .help li{margin-left:16px;}
+    .kv{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+    .kv label{font-size:12px;color:#666;}
+    .kv input{width:100%; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .pill{display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; font-size:12px; color:#111827;}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>🍎 Scan Food (Photo)</h1>
-    <div class="muted">Take a photo of a nutrition label, ingredients panel, or packaged food name. We’ll OCR it, then you can log it.</div>
+    <h1>🍎 Scan Food (High Accuracy)</h1>
+    <div class="muted">Take a photo of a <b>nutrition label</b> or <b>ingredients panel</b>. Then drag a box to crop the label for better OCR.</div>
 
-    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame, and use bright light. For labels, keep text straight.</div></div>
+    <div class="box">
+      <div class="muted"><b>Photo checklist (big accuracy boost):</b></div>
+      <ul class="help muted">
+        <li>Fill the frame with the label (get close).</li>
+        <li>Use bright light / flash indoors.</li>
+        <li>Keep the label flat and square (avoid angles).</li>
+        <li>Avoid glare (tilt slightly if shiny).</li>
+      </ul>
+    </div>
 
     <div style="margin-top:10px;">
       <input id="foodPhoto" type="file" accept="image/*" capture="environment" />
     </div>
 
-    <div class="row">
-      <button class="btn" id="btnOcrFood" type="button" disabled>🔎 OCR</button>
-      <a class="btn secondary" href="/log-food">✍️ Manual Log</a>
-    </div>
+    <div class="grid">
+      <div>
+        <div class="muted" style="margin:6px 0 8px;"><b>Crop the label</b> (drag to select). If you skip cropping, we’ll OCR the whole image.</div>
+        <div class="canvasWrap">
+          <canvas id="imgCanvas"></canvas>
+        </div>
 
-    <div style="margin-top:10px;">
-      <img id="preview" alt="" style="display:none;" />
-    </div>
+        <div class="row">
+          <button class="btn" id="btnOcr" type="button" disabled>🔎 OCR Label</button>
+          <button class="btn secondary" id="btnReset" type="button" disabled>↩️ Reset Crop</button>
+          <span class="pill" id="statusPill">Waiting for photo…</span>
+        </div>
 
-    <div style="margin-top:10px;">
-      <textarea id="foodText" placeholder="OCR text will appear here..."></textarea>
-    </div>
+        <div style="margin-top:10px;">
+          <textarea id="ocrText" placeholder="OCR text will appear here..."></textarea>
+        </div>
+      </div>
 
-    <form id="logForm" method="post" action="/log-food" style="margin-top:10px;">
-      <input type="hidden" name="scanned_text" id="scanned_text" value="">
-      <button class="btn" type="submit">➕ Log from OCR Text</button>
-      <div class="muted" style="margin-top:8px;">We’ll prefill the food log page using this text.</div>
-    </form>
+      <div>
+        <div class="muted" style="margin:6px 0 8px;"><b>Extracted nutrition (edit if needed)</b></div>
+        <div class="box">
+          <div class="kv">
+            <div>
+              <label>Serving size</label>
+              <input id="serving_size" placeholder="e.g., 2 tbsp (32g)"/>
+            </div>
+            <div>
+              <label>Calories</label>
+              <input id="calories" placeholder="e.g., 120"/>
+            </div>
+            <div>
+              <label>Protein (g)</label>
+              <input id="protein_g" placeholder="e.g., 8"/>
+            </div>
+            <div>
+              <label>Carbs (g)</label>
+              <input id="carbs_g" placeholder="e.g., 14"/>
+            </div>
+            <div>
+              <label>Fat (g)</label>
+              <input id="fat_g" placeholder="e.g., 5"/>
+            </div>
+            <div>
+              <label>Sodium (mg)</label>
+              <input id="sodium_mg" placeholder="e.g., 180"/>
+            </div>
+          </div>
+        </div>
+
+        <form id="logFoodForm" method="post" action="/log-food" style="margin-top:10px;">
+          <input type="hidden" name="food_description" id="food_description" value="">
+          <button class="btn" type="submit">➕ Log Food</button>
+          <div class="muted" style="margin-top:8px;">We’ll send a prefilled description to your existing food log.</div>
+        </form>
+
+        <div class="box" style="margin-top:10px;">
+          <div class="muted"><b>If OCR struggles:</b> retake closer + brighter, then crop tighter around the text.</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script>
     const foodPhoto = document.getElementById("foodPhoto");
-    const btn = document.getElementById("btnOcrFood");
-    const foodText = document.getElementById("foodText");
-    const preview = document.getElementById("preview");
-    const scanned = document.getElementById("scanned_text");
-    const logForm = document.getElementById("logForm");
+    const imgCanvas = document.getElementById("imgCanvas");
+    const ctx = imgCanvas.getContext("2d");
+    const btnOcr = document.getElementById("btnOcr");
+    const btnReset = document.getElementById("btnReset");
+    const ocrText = document.getElementById("ocrText");
+    const statusPill = document.getElementById("statusPill");
 
-    foodPhoto.addEventListener("change", () => {
-      const file = foodPhoto.files && foodPhoto.files[0];
-      btn.disabled = !file;
-      foodText.value = "";
-      scanned.value = "";
-      if (file){
-        const url = URL.createObjectURL(file);
-        preview.src = url;
-        preview.style.display = "block";
-      } else {
-        preview.style.display = "none";
+    const serving_size = document.getElementById("serving_size");
+    const calories = document.getElementById("calories");
+    const protein_g = document.getElementById("protein_g");
+    const carbs_g = document.getElementById("carbs_g");
+    const fat_g = document.getElementById("fat_g");
+    const sodium_mg = document.getElementById("sodium_mg");
+
+    const food_description = document.getElementById("food_description");
+    const logFoodForm = document.getElementById("logFoodForm");
+
+    let img = new Image();
+    let imgLoaded = false;
+
+    let crop = null; // {x,y,w,h}
+    let dragging = false;
+    let dragStart = null;
+
+    function setStatus(text){ statusPill.textContent = text; }
+
+    function fitCanvasToImage(){
+      const maxW = 1000;
+      const scale = Math.min(1, maxW / img.naturalWidth);
+      imgCanvas.width = Math.round(img.naturalWidth * scale);
+      imgCanvas.height = Math.round(img.naturalHeight * scale);
+      redraw();
+    }
+
+    function redraw(){
+      ctx.clearRect(0,0,imgCanvas.width,imgCanvas.height);
+      if (!imgLoaded) return;
+      ctx.drawImage(img, 0, 0, imgCanvas.width, imgCanvas.height);
+
+      if (crop && crop.w>2 && crop.h>2){
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(0,0,imgCanvas.width,imgCanvas.height);
+        ctx.clearRect(crop.x, crop.y, crop.w, crop.h);
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(17,24,39,0.95)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(crop.x+1, crop.y+1, crop.w-2, crop.h-2);
+        ctx.restore();
       }
+    }
+
+    function canvasPoint(e){
+      const rect = imgCanvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left) * (imgCanvas.width / rect.width);
+      const cy = (e.clientY - rect.top) * (imgCanvas.height / rect.height);
+      return {x: Math.max(0, Math.min(imgCanvas.width, cx)), y: Math.max(0, Math.min(imgCanvas.height, cy))};
+    }
+
+    function startDrag(e){
+      if (!imgLoaded) return;
+      dragging = true;
+      const p = canvasPoint(e);
+      dragStart = p;
+      crop = {x:p.x, y:p.y, w:0, h:0};
+      redraw();
+    }
+    function moveDrag(e){
+      if (!dragging || !dragStart) return;
+      const p = canvasPoint(e);
+      const x = Math.min(dragStart.x, p.x);
+      const y = Math.min(dragStart.y, p.y);
+      const w = Math.abs(dragStart.x - p.x);
+      const h = Math.abs(dragStart.y - p.y);
+      crop = {x, y, w, h};
+      redraw();
+    }
+    function endDrag(){
+      dragging = false;
+      dragStart = null;
+      redraw();
+    }
+
+    imgCanvas.addEventListener("pointerdown", (e)=>{ imgCanvas.setPointerCapture(e.pointerId); startDrag(e); });
+    imgCanvas.addEventListener("pointermove", (e)=>{ moveDrag(e); });
+    imgCanvas.addEventListener("pointerup", ()=>{ endDrag(); });
+    imgCanvas.addEventListener("pointercancel", ()=>{ endDrag(); });
+
+    btnReset.addEventListener("click", ()=>{
+      crop = null;
+      redraw();
+      setStatus("Crop cleared.");
     });
 
-    btn.addEventListener("click", async () => {
+    foodPhoto.addEventListener("change", ()=>{
       const file = foodPhoto.files && foodPhoto.files[0];
-      if (!file) return;
-      btn.disabled = true;
-      btn.textContent = "Working...";
+      btnOcr.disabled = !file;
+      btnReset.disabled = !file;
+      ocrText.value = "";
+      serving_size.value = "";
+      calories.value = "";
+      protein_g.value = "";
+      carbs_g.value = "";
+      fat_g.value = "";
+      sodium_mg.value = "";
+      crop = null;
+      if (!file){
+        imgLoaded = false;
+        redraw();
+        setStatus("Waiting for photo…");
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      img = new Image();
+      img.onload = ()=>{
+        imgLoaded = true;
+        fitCanvasToImage();
+        setStatus("Drag to crop the label, then OCR.");
+      };
+      img.src = url;
+    });
+
+    function preprocessToCanvas(srcCanvas, region){
+      const sx = region ? Math.max(0, region.x) : 0;
+      const sy = region ? Math.max(0, region.y) : 0;
+      const sw = region ? Math.max(1, region.w) : srcCanvas.width;
+      const sh = region ? Math.max(1, region.h) : srcCanvas.height;
+
+      const cropCanvas = document.createElement("canvas");
+      cropCanvas.width = sw;
+      cropCanvas.height = sh;
+      const cctx = cropCanvas.getContext("2d");
+      cctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+      const targetW = Math.min(2000, Math.max(900, sw * 2));
+      const rScale = targetW / sw;
+      const targetH = Math.round(sh * rScale);
+
+      const out = document.createElement("canvas");
+      out.width = Math.round(targetW);
+      out.height = targetH;
+      const octx = out.getContext("2d");
+      octx.imageSmoothingEnabled = true;
+      octx.imageSmoothingQuality = "high";
+      octx.drawImage(cropCanvas, 0, 0, out.width, out.height);
+
+      const imgData = octx.getImageData(0,0,out.width,out.height);
+      const d = imgData.data;
+
+      const contrast = 1.35;
+      const thresh = 155;
+
+      for (let i=0; i<d.length; i+=4){
+        const r=d[i], g=d[i+1], b=d[i+2];
+        let v = 0.2126*r + 0.7152*g + 0.0722*b;
+        v = (v - 128) * contrast + 128;
+        v = Math.max(0, Math.min(255, v));
+        const bw = v > thresh ? 255 : 0;
+        d[i]=d[i+1]=d[i+2]=bw;
+      }
+      octx.putImageData(imgData, 0, 0);
+      return out;
+    }
+
+    function parseNutrition(text){
+      const t = (text||"").replace(/\\r/g,"");
+      const lower = t.toLowerCase();
+
+      function m(re){
+        const mm = t.match(re);
+        return mm ? mm[1].trim() : "";
+      }
+      function num(re){
+        const mm = t.match(re);
+        return mm ? mm[1] : "";
+      }
+
+      const out = {
+        serving_size: m(/serving\\s*size[:\\s]*([^\\n]+)/i),
+        calories: num(/calories[^0-9]{0,8}([0-9]{1,4})/i),
+        protein_g: num(/protein[^0-9]{0,8}([0-9]+(?:\\.[0-9]+)?)\\s*g/i),
+        carbs_g: num(/(?:total\\s*)?carbohydrate[^0-9]{0,8}([0-9]+(?:\\.[0-9]+)?)\\s*g/i),
+        fat_g: num(/(?:total\\s*)?fat[^0-9]{0,8}([0-9]+(?:\\.[0-9]+)?)\\s*g/i),
+        sodium_mg: num(/sodium[^0-9]{0,8}([0-9]+(?:\\.[0-9]+)?)\\s*mg/i),
+      };
+
+      if (!out.calories){
+        const alt = lower.match(/\\b([0-9]{2,4})\\b\\s*(?:kcal|cal)\\b/i);
+        if (alt) out.calories = alt[1];
+      }
+      return out;
+    }
+
+    btnOcr.addEventListener("click", async ()=>{
+      if (!imgLoaded) return;
+      btnOcr.disabled = true;
+      btnReset.disabled = true;
+      setStatus("OCR running…");
+
       try{
-        const result = await Tesseract.recognize(file, "eng", { logger: m => console.log(m) });
+        const useCrop = (crop && crop.w>40 && crop.h>40) ? crop : null;
+        const processed = preprocessToCanvas(imgCanvas, useCrop);
+
+        const result = await Tesseract.recognize(processed, "eng", {
+          logger: (m) => {}
+        });
         const text = (result && result.data && result.data.text) ? result.data.text.trim() : "";
-        foodText.value = text;
-        scanned.value = text;
-        if (!text){
-          alert("No text found. Try brighter lighting and closer focus.");
-        }
+        ocrText.value = text;
+
+        const parsed = parseNutrition(text);
+        serving_size.value = parsed.serving_size || serving_size.value;
+        calories.value = parsed.calories || calories.value;
+        protein_g.value = parsed.protein_g || protein_g.value;
+        carbs_g.value = parsed.carbs_g || carbs_g.value;
+        fat_g.value = parsed.fat_g || fat_g.value;
+        sodium_mg.value = parsed.sodium_mg || sodium_mg.value;
+
+        setStatus(text ? "OCR complete. Review fields, then log." : "No text found — retake and crop tighter.");
       }catch(e){
         console.error(e);
-        alert("OCR failed. Try again with clearer photo.");
+        setStatus("OCR failed.");
+        alert("OCR failed. Try retaking the photo with brighter light and tighter crop.");
       }finally{
-        btn.disabled = false;
-        btn.textContent = "🔎 OCR";
+        btnOcr.disabled = false;
+        btnReset.disabled = false;
       }
     });
 
-    logForm.addEventListener("submit", (e) => {
-      scanned.value = foodText.value || "";
+    logFoodForm.addEventListener("submit", (e)=>{
+      const parts = [];
+      if (serving_size.value) parts.push("Serving: " + serving_size.value);
+      if (calories.value) parts.push("Calories: " + calories.value);
+      if (protein_g.value) parts.push("Protein: " + protein_g.value + "g");
+      if (carbs_g.value) parts.push("Carbs: " + carbs_g.value + "g");
+      if (fat_g.value) parts.push("Fat: " + fat_g.value + "g");
+      if (sodium_mg.value) parts.push("Sodium: " + sodium_mg.value + "mg");
+
+      const header = parts.join(" | ");
+      const raw = (ocrText.value || "").trim();
+      food_description.value = header + (raw ? ("\\n\\nOCR:\\n" + raw) : "");
     });
   </script>
 </body>
@@ -612,26 +869,30 @@ def scan_peptides():
   <title>Scan Peptides</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
-    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:860px; margin:0 auto;}
     h1{font-size:20px;margin:0 0 6px;}
     .muted{color:#666;font-size:13px;line-height:1.4}
     input[type=file]{width:100%;}
-    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:800; cursor:pointer;}
+    .btn.secondary{background:#fff;color:#111827;}
     .btn:disabled{opacity:.5;cursor:not-allowed;}
     .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
-    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    textarea{width:100%; min-height:110px; padding:10px; border-radius:12px; border:1px solid #e6e6ef; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;}
     .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
     .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
     .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
-    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:800;}
+    .canvasWrap{position:relative; width:100%; border-radius:12px; overflow:hidden; border:1px solid #e6e6ef; background:#fff;}
+    canvas{width:100%; height:auto; display:block; touch-action:none;}
+    .pill{display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; font-size:12px; color:#111827;}
   </style>
 </head>
 <body>
   <div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div>
-        <h1>📦 Scan Peptides</h1>
-        <div class="muted">Take a photo of the box/kit label (handwritten or printed). We’ll extract text and suggest peptide matches.</div>
+        <h1>📦 Scan Peptides (High Accuracy)</h1>
+        <div class="muted">Take a photo of the label (handwritten or printed). Drag to crop the label area for better OCR.</div>
       </div>
       <div class="toplinks">
         <a class="linkbtn" href="/add-vial">➕ Add Vial</a>
@@ -639,14 +900,21 @@ def scan_peptides():
       </div>
     </div>
 
-    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light.</div></div>
+    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light. Crop tightly around the label.</div></div>
 
     <div style="margin-top:10px;">
       <input id="pepPhoto" type="file" accept="image/*" capture="environment" />
     </div>
 
+    <div class="muted" style="margin:8px 0 8px;"><b>Crop the label</b> (drag to select)</div>
+    <div class="canvasWrap">
+      <canvas id="imgCanvas"></canvas>
+    </div>
+
     <div class="row">
       <button class="btn" id="btnOcrPep" type="button" disabled>🔎 OCR Label</button>
+      <button class="btn secondary" id="btnReset" type="button" disabled>↩️ Reset Crop</button>
+      <span class="pill" id="statusPill">Waiting for photo…</span>
     </div>
 
     <div style="margin-top:10px;">
@@ -665,17 +933,23 @@ def scan_peptides():
     const peptideNames = {{ peptide_names | tojson }};
     const pepPhoto = document.getElementById("pepPhoto");
     const btn = document.getElementById("btnOcrPep");
+    const btnReset = document.getElementById("btnReset");
     const pepText = document.getElementById("pepText");
     const matchBox = document.getElementById("matchBox");
     const matchChips = document.getElementById("matchChips");
+    const statusPill = document.getElementById("statusPill");
 
-    pepPhoto.addEventListener("change", () => {
-      const file = pepPhoto.files && pepPhoto.files[0];
-      btn.disabled = !file;
-      pepText.value = "";
-      matchBox.style.display = "none";
-      matchChips.innerHTML = "";
-    });
+    const imgCanvas = document.getElementById("imgCanvas");
+    const ctx = imgCanvas.getContext("2d");
+
+    let img = new Image();
+    let imgLoaded = false;
+
+    let crop = null;
+    let dragging = false;
+    let dragStart = null;
+
+    function setStatus(text){ statusPill.textContent = text; }
 
     function normalize(s){
       return (s||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").replace(/\s+/g," ").trim();
@@ -697,47 +971,186 @@ def scan_peptides():
       const scored = peptideNames.map(n => ({name:n, score: scoreMatch(text,n)}))
                                 .filter(x => x.score > 0)
                                 .sort((a,b) => b.score - a.score)
-                                .slice(0,8);
-      return scored;
+                                .slice(0, 8);
+
+      matchChips.innerHTML = "";
+      if (!scored.length){
+        matchBox.style.display = "none";
+        return;
+      }
+      for (const s of scored){
+        const chip = document.createElement("div");
+        chip.className = "chip";
+        chip.textContent = s.name;
+        chip.onclick = () => {
+          alert("Suggestion: " + s.name + "\\n\\nNext: select this peptide on Add Vial.");
+          window.location.href = "/add-vial";
+        };
+        matchChips.appendChild(chip);
+      }
+      matchBox.style.display = "block";
     }
 
-    btn.addEventListener("click", async () => {
+    function fitCanvasToImage(){
+      const maxW = 1000;
+      const scale = Math.min(1, maxW / img.naturalWidth);
+      imgCanvas.width = Math.round(img.naturalWidth * scale);
+      imgCanvas.height = Math.round(img.naturalHeight * scale);
+      redraw();
+    }
+
+    function redraw(){
+      ctx.clearRect(0,0,imgCanvas.width,imgCanvas.height);
+      if (!imgLoaded) return;
+      ctx.drawImage(img, 0, 0, imgCanvas.width, imgCanvas.height);
+
+      if (crop && crop.w>2 && crop.h>2){
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(0,0,imgCanvas.width,imgCanvas.height);
+        ctx.clearRect(crop.x, crop.y, crop.w, crop.h);
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(17,24,39,0.95)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(crop.x+1, crop.y+1, crop.w-2, crop.h-2);
+        ctx.restore();
+      }
+    }
+
+    function canvasPoint(e){
+      const rect = imgCanvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left) * (imgCanvas.width / rect.width);
+      const cy = (e.clientY - rect.top) * (imgCanvas.height / rect.height);
+      return {x: Math.max(0, Math.min(imgCanvas.width, cx)), y: Math.max(0, Math.min(imgCanvas.height, cy))};
+    }
+
+    function startDrag(e){
+      if (!imgLoaded) return;
+      dragging = true;
+      const p = canvasPoint(e);
+      dragStart = p;
+      crop = {x:p.x, y:p.y, w:0, h:0};
+      redraw();
+    }
+    function moveDrag(e){
+      if (!dragging || !dragStart) return;
+      const p = canvasPoint(e);
+      const x = Math.min(dragStart.x, p.x);
+      const y = Math.min(dragStart.y, p.y);
+      const w = Math.abs(dragStart.x - p.x);
+      const h = Math.abs(dragStart.y - p.y);
+      crop = {x, y, w, h};
+      redraw();
+    }
+    function endDrag(){
+      dragging = false;
+      dragStart = null;
+      redraw();
+    }
+
+    imgCanvas.addEventListener("pointerdown", (e)=>{ imgCanvas.setPointerCapture(e.pointerId); startDrag(e); });
+    imgCanvas.addEventListener("pointermove", (e)=>{ moveDrag(e); });
+    imgCanvas.addEventListener("pointerup", ()=>{ endDrag(); });
+    imgCanvas.addEventListener("pointercancel", ()=>{ endDrag(); });
+
+    btnReset.addEventListener("click", ()=>{
+      crop = null;
+      redraw();
+      setStatus("Crop cleared.");
+    });
+
+    pepPhoto.addEventListener("change", ()=>{
       const file = pepPhoto.files && pepPhoto.files[0];
-      if (!file) return;
+      btn.disabled = !file;
+      btnReset.disabled = !file;
+      pepText.value = "";
+      matchBox.style.display = "none";
+      matchChips.innerHTML = "";
+      crop = null;
+
+      if (!file){
+        imgLoaded = false;
+        redraw();
+        setStatus("Waiting for photo…");
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      img = new Image();
+      img.onload = ()=>{
+        imgLoaded = true;
+        fitCanvasToImage();
+        setStatus("Drag to crop the label, then OCR.");
+      };
+      img.src = url;
+    });
+
+    function preprocessToCanvas(srcCanvas, region){
+      const sx = region ? Math.max(0, region.x) : 0;
+      const sy = region ? Math.max(0, region.y) : 0;
+      const sw = region ? Math.max(1, region.w) : srcCanvas.width;
+      const sh = region ? Math.max(1, region.h) : srcCanvas.height;
+
+      const cropCanvas = document.createElement("canvas");
+      cropCanvas.width = sw;
+      cropCanvas.height = sh;
+      const cctx = cropCanvas.getContext("2d");
+      cctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+      const targetW = Math.min(2000, Math.max(900, sw * 2));
+      const rScale = targetW / sw;
+      const targetH = Math.round(sh * rScale);
+
+      const out = document.createElement("canvas");
+      out.width = Math.round(targetW);
+      out.height = targetH;
+      const octx = out.getContext("2d");
+      octx.imageSmoothingEnabled = true;
+      octx.imageSmoothingQuality = "high";
+      octx.drawImage(cropCanvas, 0, 0, out.width, out.height);
+
+      const imgData = octx.getImageData(0,0,out.width,out.height);
+      const d = imgData.data;
+      const contrast = 1.35;
+      const thresh = 155;
+
+      for (let i=0; i<d.length; i+=4){
+        const r=d[i], g=d[i+1], b=d[i+2];
+        let v = 0.2126*r + 0.7152*g + 0.0722*b;
+        v = (v - 128) * contrast + 128;
+        v = Math.max(0, Math.min(255, v));
+        const bw = v > thresh ? 255 : 0;
+        d[i]=d[i+1]=d[i+2]=bw;
+      }
+      octx.putImageData(imgData, 0, 0);
+      return out;
+    }
+
+    btn.addEventListener("click", async ()=>{
+      const file = pepPhoto.files && pepPhoto.files[0];
+      if (!file || !imgLoaded) return;
 
       btn.disabled = true;
-      btn.textContent = "Running OCR...";
+      btnReset.disabled = true;
+      setStatus("OCR running…");
+
       try{
-        const { data } = await Tesseract.recognize(file, "eng");
-        const text = (data && data.text) ? data.text.trim() : "";
+        const useCrop = (crop && crop.w>40 && crop.h>40) ? crop : null;
+        const processed = preprocessToCanvas(imgCanvas, useCrop);
+
+        const result = await Tesseract.recognize(processed, "eng", { logger: m => {} });
+        const text = (result && result.data && result.data.text) ? result.data.text.trim() : "";
         pepText.value = text;
-
-        const suggestions = buildSuggestions(text);
-        matchChips.innerHTML = "";
-
-        if (suggestions.length){
-          suggestions.forEach(s => {
-            const chip = document.createElement("div");
-            chip.className = "chip";
-            chip.textContent = s.name;
-            chip.addEventListener("click", () => {
-              const u = new URL(window.location.origin + "/add-vial");
-              u.searchParams.set("suggest_peptide", s.name);
-              window.location.href = u.toString();
-            });
-            matchChips.appendChild(chip);
-          });
-          matchBox.style.display = "block";
-        } else {
-          matchBox.style.display = "block";
-          matchChips.innerHTML = "<div class='muted'>No confident match found — try a closer photo, or just go to Add Vial and select manually.</div>";
-        }
-
-      }catch(err){
-        alert("OCR failed. Try again with brighter lighting and closer focus.");
+        buildSuggestions(text);
+        setStatus(text ? "OCR complete. Tap a suggestion." : "No text found — retake and crop tighter.");
+      }catch(e){
+        console.error(e);
+        setStatus("OCR failed.");
+        alert("OCR failed. Try retaking the photo with brighter light and tighter crop.");
       }finally{
         btn.disabled = false;
-        btn.textContent = "🔎 OCR Label";
+        btnReset.disabled = false;
       }
     });
   </script>
