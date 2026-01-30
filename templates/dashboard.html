@@ -284,7 +284,7 @@
             <a href="{{ url_for('protocol_detail', protocol_id=protocol.id) }}" class="list-group-item list-group-item-action">
               <div class="d-flex w-100 justify-content-between">
                 <h6 class="mb-1">{{ protocol.name }}</h6>
-                <small class="text-muted">{{ protocol.peptide.name }}</small>
+                <small class="text-muted">{{ protocol.peptide.name if protocol.peptide else 'Unknown' }}</small>
               </div>
               <p class="mb-1 small">
                 <span class="badge bg-primary">{{ protocol.dose_mcg }} mcg</span>

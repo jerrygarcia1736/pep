@@ -462,23 +462,11 @@ def _compute_dashboard_context() -> Tuple[Dict[str, Any], List[Any], List[Any]]:
     # Best-effort: use your project's DB helper if present; otherwise defaults
     try:
         from database import PeptideDB  # type: ignore
-        from sqlalchemy.orm import joinedload  # Import for eager loading
 
         db = get_session(db_url)
         try:
             pdb = PeptideDB(db)
-            
-            # EAGERLY LOAD peptide relationship to prevent DetachedInstanceError
-            # This loads protocol.peptide while session is still open
-            try:
-                protocols = getattr(pdb, "list_active_protocols", lambda: [])()
-                # Force load peptide relationships before session closes
-                for p in protocols:
-                    if hasattr(p, 'peptide') and p.peptide:
-                        _ = p.peptide.name  # Access to force load
-            except:
-                protocols = []
-            
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
             recent_injections = getattr(pdb, "get_recent_injections", lambda days=7: [])(days=7)
             active_vials = getattr(pdb, "list_active_vials", lambda: [])()
             all_peptides = getattr(pdb, "list_peptides", lambda: [])()
