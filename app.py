@@ -34,6 +34,11 @@ from confidence import compute_injection_confidence
 # Flask app
 # -----------------------------------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# --- Mobile login / iOS Safari safety fix ---
+from mobile_login_fix import register_mobile_login_fixes
+register_mobile_login_fixes(app)
+
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
 # ----------------------------
