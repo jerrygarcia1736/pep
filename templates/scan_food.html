@@ -1,80 +1,98 @@
-
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>{{ title or "Scan Food" }}</title>
+  <title>📸 Scan Food</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:18px;max-width:720px}
-    h1{font-size:20px;margin:0 0 10px}
-    .tabs{display:flex;gap:8px;margin:12px 0}
-    .tab{border:1px solid #ccc;border-radius:10px;padding:8px 10px;background:#fff;cursor:pointer}
-    .tab.active{border-color:#111}
-    .card{border:1px solid #ddd;border-radius:14px;padding:12px;margin-top:10px}
-    .hint{color:#555;font-size:13px;margin:8px 0 0}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    button{padding:10px 12px;border:1px solid #111;background:#111;color:#fff;border-radius:12px;cursor:pointer}
-    button.secondary{background:#fff;color:#111}
-    button:disabled{opacity:.55;cursor:not-allowed}
-    textarea{width:100%;min-height:110px;margin-top:10px;font-family:ui-monospace,Menlo,monospace}
-    .pred{display:flex;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid #eee;border-radius:12px;margin:8px 0;cursor:pointer}
-    .pred:hover{border-color:#bbb}
-    .small{font-size:12px;color:#666}
-    .status{margin-top:10px;color:#444}
-    img.preview{max-width:100%;border-radius:12px;border:1px solid #eee}
-    .note{font-size:12px;color:#666;line-height:1.4}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:18px;max-width:720px;margin:0 auto;padding:18px;background:#f8f9fa}
+    h1{font-size:22px;margin:0 0 8px;display:flex;align-items:center;gap:8px}
+    .sub{color:#555;font-size:14px;margin:0 0 16px;line-height:1.5}
+    .tabs{display:flex;gap:8px;margin:14px 0}
+    .tab{flex:1;padding:10px 14px;border-radius:12px;border:2px solid #e0e0e0;background:#fff;cursor:pointer;text-align:center;font-weight:600;transition:all .2s}
+    .tab:hover{border-color:#bbb}
+    .tab.active{background:#4f46e5;color:#fff;border-color:#4f46e5}
+    .card{border:1px solid #e0e0e0;border-radius:16px;padding:16px;background:#fff;margin-top:14px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+    .hint{color:#666;font-size:13px;margin:10px 0 0;line-height:1.4;padding:8px 12px;background:#f0f0f0;border-radius:8px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
+    button{padding:12px 16px;border:none;background:#111;color:#fff;border-radius:12px;cursor:pointer;font-weight:600;font-size:14px;transition:all .2s}
+    button:hover{background:#333}
+    button.secondary{background:#fff;color:#111;border:2px solid #111}
+    button.secondary:hover{background:#f5f5f5}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    button.camera-btn{background:#4f46e5;font-size:16px}
+    button.camera-btn:hover{background:#4338ca}
+    textarea{width:100%;min-height:110px;margin-top:12px;font-family:ui-monospace,Menlo,monospace;border:2px solid #e0e0e0;border-radius:12px;padding:12px;font-size:14px;resize:vertical}
+    .pred{display:flex;justify-content:space-between;gap:12px;padding:12px 14px;border:2px solid #e0e0e0;border-radius:12px;margin:10px 0;cursor:pointer;transition:all .2s;background:#fff}
+    .pred:hover{border-color:#4f46e5;transform:translateY(-2px);box-shadow:0 4px 12px rgba(79,70,229,.15)}
+    .pred b{font-size:16px}
+    .small{font-size:12px;color:#666;margin-top:4px}
+    .confidence{font-size:18px;font-weight:700;color:#4f46e5}
+    .status{margin-top:12px;padding:10px 14px;border-radius:8px;font-size:14px;font-weight:600}
+    .status.loading{background:#fef3c7;color:#92400e}
+    .status.success{background:#d1fae5;color:#065f46}
+    .status.error{background:#fee2e2;color:#991b1b}
+    img.preview{max-width:100%;border-radius:12px;border:2px solid #e0e0e0;margin-top:12px}
+    .note{font-size:13px;color:#666;line-height:1.5;padding:12px;background:#f0f0f0;border-radius:8px;margin-bottom:12px}
+    .note ul{margin:8px 0;padding-left:20px}
+    .note li{margin:4px 0}
+    input[type=file]{display:none}
+    .file-input-label{display:inline-flex;align-items:center;gap:8px;padding:12px 16px;background:#fff;border:2px solid #111;border-radius:12px;cursor:pointer;font-weight:600;transition:all .2s}
+    .file-input-label:hover{background:#f5f5f5}
+    .spinner{border:3px solid #f3f3f3;border-top:3px solid #4f46e5;border-radius:50%;width:24px;height:24px;animation:spin .8s linear infinite;display:inline-block;margin-right:8px}
+    @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
-<h1>{{ title or "Scan Food" }}</h1>
+<h1>📸 Scan Food</h1>
 <div class="note">
-  Choose a scan mode:
+  Snap a photo of the food for best-guess labels, or use OCR to extract text from receipts/labels.
   <ul>
-    <li><b>Photo (AI Guess)</b>: take a picture of the food (e.g., an apple) and get best-guess labels.</li>
-    <li><b>Text (OCR)</b>: take a picture of a receipt/label and extract text.</li>
+    <li><b>Photo (AI Guess)</b>: Take a picture of food (e.g., apple, chicken breast)</li>
+    <li><b>Text (OCR)</b>: Extract text from nutrition labels or receipts</li>
   </ul>
-  Always confirm before saving—these are suggestions.
+  Always confirm suggestions before logging!
 </div>
 
 <div class="tabs">
-  <button id="tab-photo" class="tab active" type="button">Photo (AI Guess)</button>
-  <button id="tab-ocr" class="tab" type="button">Text (OCR)</button>
+  <button id="tab-photo" class="tab active" type="button">📷 Photo (AI Guess)</button>
+  <button id="tab-ocr" class="tab" type="button">📝 Text (OCR)</button>
 </div>
 
+<!-- PHOTO AI PANEL -->
 <div id="panel-photo" class="card">
+  <input id="foodPhoto" type="file" accept="image/*" capture="environment"/>
   <div class="row">
-    <input id="foodPhoto" type="file" accept="image/*" capture="environment"/>
-    <button id="btnClassify" type="button">Analyze Photo</button>
-    <button id="btnClearPhoto" class="secondary" type="button">Clear</button>
+    <button id="btnUseCamera" class="camera-btn" type="button">📸 Use Camera</button>
+    <label for="foodPhoto" class="file-input-label">📁 Choose File</label>
+    <button id="btnClearPhoto" class="secondary" type="button">🗑️ Clear</button>
   </div>
-  <div class="hint">Tip: center the food, fill most of the frame, and use bright light.</div>
-  <div id="photoStatus" class="status"></div>
-  <div id="photoPreviewWrap" style="margin-top:10px;display:none;">
+  <div class="hint">💡 Tip: Center the food, fill the frame, use good lighting</div>
+  <div id="photoStatus" class="status" style="display:none"></div>
+  <div id="photoPreviewWrap" style="display:none;">
     <img id="photoPreview" class="preview" alt="preview"/>
   </div>
-  <div id="predictions" style="margin-top:12px;"></div>
+  <div id="predictions"></div>
 </div>
 
+<!-- OCR TEXT PANEL -->
 <div id="panel-ocr" class="card" style="display:none;">
+  <input id="imageInput" type="file" accept="image/*" capture="environment"/>
   <div class="row">
-    <input id="imageInput" type="file" accept="image/*" capture="environment"/>
-    <button id="btnOcr" type="button">Scan Text</button>
-    <button id="btnClearOcr" class="secondary" type="button">Clear</button>
+    <button id="btnUseCameraOcr" class="camera-btn" type="button">📸 Use Camera</button>
+    <label for="imageInput" class="file-input-label">📁 Choose File</label>
+    <button id="btnClearOcr" class="secondary" type="button">🗑️ Clear</button>
   </div>
-  <div class="hint">Best for receipts, labels, or handwritten notes about what you ate.</div>
-  <div id="ocrStatus" class="status"></div>
-  <textarea id="ocrText" placeholder="OCR results will appear here..."></textarea>
-  <div class="row" style="margin-top:10px;">
-    <button id="btnUseOcr" type="button">Use Text in Food Log</button>
+  <div class="hint">💡 Best for nutrition labels, receipts, or handwritten food notes</div>
+  <div id="ocrStatus" class="status" style="display:none"></div>
+  <textarea id="ocrText" placeholder="Extracted text will appear here..."></textarea>
+  <div class="row">
+    <button id="btnUseOcr" type="button">✅ Use Text in Food Log</button>
   </div>
 </div>
-
-<!-- TensorFlow.js + MobileNet (open source) for in-browser classification -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 
 <script>
+// Tab switching
 const tabPhoto = document.getElementById('tab-photo');
 const tabOcr = document.getElementById('tab-ocr');
 const panelPhoto = document.getElementById('panel-photo');
@@ -90,117 +108,173 @@ function setTab(which){
 tabPhoto.addEventListener('click', () => setTab('photo'));
 tabOcr.addEventListener('click', () => setTab('ocr'));
 
+// === PHOTO AI PANEL ===
 const foodPhoto = document.getElementById('foodPhoto');
-const btnClassify = document.getElementById('btnClassify');
+const btnUseCamera = document.getElementById('btnUseCamera');
 const btnClearPhoto = document.getElementById('btnClearPhoto');
 const photoStatus = document.getElementById('photoStatus');
 const photoPreviewWrap = document.getElementById('photoPreviewWrap');
 const photoPreview = document.getElementById('photoPreview');
 const predictions = document.getElementById('predictions');
 
-let mobilenetModel = null;
+// Use Camera button - triggers file input with camera
+btnUseCamera.addEventListener('click', () => {
+  foodPhoto.click();
+});
 
-foodPhoto.addEventListener('change', () => {
+// When photo selected, show preview and analyze automatically
+foodPhoto.addEventListener('change', async () => {
   const file = foodPhoto.files && foodPhoto.files[0];
   predictions.innerHTML = '';
-  photoStatus.textContent = '';
-  if (!file) { photoPreviewWrap.style.display = 'none'; return; }
+  photoStatus.style.display = 'none';
+  
+  if (!file) { 
+    photoPreviewWrap.style.display = 'none'; 
+    return; 
+  }
+  
   const url = URL.createObjectURL(file);
   photoPreview.src = url;
   photoPreviewWrap.style.display = 'block';
+  
+  // Auto-analyze on mobile
+  await analyzePhoto(file);
 });
 
 btnClearPhoto.addEventListener('click', () => {
   foodPhoto.value = '';
   photoPreviewWrap.style.display = 'none';
   predictions.innerHTML = '';
-  photoStatus.textContent = '';
+  photoStatus.style.display = 'none';
 });
 
-async function ensureModel(){
-  if (mobilenetModel) return mobilenetModel;
-  photoStatus.textContent = 'Loading model...';
-  mobilenetModel = await mobilenet.load({version: 2, alpha: 1.0});
-  return mobilenetModel;
-}
-
-btnClassify.addEventListener('click', async () => {
-  const file = foodPhoto.files && foodPhoto.files[0];
+async function analyzePhoto(file){
+  if (!file) return;
+  
+  btnUseCamera.disabled = true;
   predictions.innerHTML = '';
-  if (!file) { photoStatus.textContent = 'Choose a photo first.'; return; }
-  btnClassify.disabled = true;
+  photoStatus.className = 'status loading';
+  photoStatus.style.display = 'block';
+  photoStatus.innerHTML = '<span class="spinner"></span>Analyzing food...';
+  
   try{
-    await ensureModel();
-    photoStatus.textContent = 'Analyzing...';
-    await new Promise((res, rej) => {
-      if (photoPreview.complete) return res();
-      photoPreview.onload = () => res();
-      photoPreview.onerror = () => rej(new Error('Could not load image.'));
+    const form = new FormData();
+    form.append('image', file);
+    
+    const res = await fetch('/api/classify-food', { 
+      method: 'POST', 
+      body: form 
     });
-    const preds = await mobilenetModel.classify(photoPreview, 5);
-    if (!preds || preds.length === 0){
-      photoStatus.textContent = 'No guesses found. Try a clearer photo.';
+    
+    const data = await res.json();
+    
+    if (!res.ok) throw new Error(data.error || 'Classification failed');
+    
+    const preds = data.predictions || [];
+    
+    if (preds.length === 0){
+      photoStatus.className = 'status error';
+      photoStatus.textContent = '❌ No food detected. Try a clearer photo with better lighting.';
       return;
     }
-    photoStatus.textContent = 'Tap a guess to log it:';
+    
+    photoStatus.className = 'status success';
+    photoStatus.textContent = '✅ Found ' + preds.length + ' matches! Tap one to log it:';
+    
     preds.forEach(p => {
-      const label = (p.className || '').split(',')[0].trim();
-      const pct = Math.round((p.probability || 0) * 100);
       const div = document.createElement('div');
       div.className = 'pred';
-      div.innerHTML = `<div><b>${label}</b><div class="small">${p.className}</div></div><div>${pct}%</div>`;
+      const pct = Math.round((p.confidence || 0) * 100);
+      div.innerHTML = `
+        <div>
+          <b>${p.label}</b>
+          <div class="small">${p.description || ''}</div>
+        </div>
+        <div class="confidence">${pct}%</div>
+      `;
       div.addEventListener('click', () => {
-        window.location.href = '/log-food?q=' + encodeURIComponent(label);
+        window.location.href = '/log-food?q=' + encodeURIComponent(p.label);
       });
       predictions.appendChild(div);
     });
+    
   }catch(e){
-    photoStatus.textContent = 'Error: ' + e.message;
+    photoStatus.className = 'status error';
+    photoStatus.textContent = '❌ Error: ' + e.message;
   }finally{
-    btnClassify.disabled = false;
+    btnUseCamera.disabled = false;
   }
-});
+}
 
-// --- OCR panel logic (server-side OCR) ---
+// === OCR PANEL ===
 const imageInput = document.getElementById('imageInput');
-const btnOcr = document.getElementById('btnOcr');
+const btnUseCameraOcr = document.getElementById('btnUseCameraOcr');
 const btnClearOcr = document.getElementById('btnClearOcr');
 const ocrStatus = document.getElementById('ocrStatus');
 const ocrText = document.getElementById('ocrText');
 const btnUseOcr = document.getElementById('btnUseOcr');
 
+btnUseCameraOcr.addEventListener('click', () => {
+  imageInput.click();
+});
+
+imageInput.addEventListener('change', async () => {
+  const file = imageInput.files && imageInput.files[0];
+  if (!file) return;
+  
+  // Auto-OCR on upload
+  await performOCR(file);
+});
+
 btnClearOcr.addEventListener('click', () => {
   imageInput.value = '';
   ocrText.value = '';
-  ocrStatus.textContent = '';
+  ocrStatus.style.display = 'none';
 });
 
 btnUseOcr.addEventListener('click', () => {
   const q = (ocrText.value || '').trim();
-  if (!q) { ocrStatus.textContent = 'Scan text first.'; return; }
+  if (!q) { 
+    ocrStatus.className = 'status error';
+    ocrStatus.style.display = 'block';
+    ocrStatus.textContent = '❌ Scan text first'; 
+    return; 
+  }
   window.location.href = '/log-food?q=' + encodeURIComponent(q);
 });
 
-btnOcr.addEventListener('click', async () => {
-  const file = imageInput.files && imageInput.files[0];
-  if (!file) { ocrStatus.textContent = 'Choose a photo first.'; return; }
-  btnOcr.disabled = true;
+async function performOCR(file){
+  if (!file) return;
+  
+  btnUseCameraOcr.disabled = true;
+  ocrStatus.className = 'status loading';
+  ocrStatus.style.display = 'block';
+  ocrStatus.innerHTML = '<span class="spinner"></span>Extracting text...';
+  
   try{
-    ocrStatus.textContent = 'Uploading...';
     const form = new FormData();
     form.append('image', file);
-    const res = await fetch('{{ api_endpoint }}', { method:'POST', body: form });
+    
+    const res = await fetch('/api/ocr-food', { 
+      method: 'POST', 
+      body: form 
+    });
+    
     const data = await res.json();
+    
     if (!res.ok) throw new Error(data.error || 'OCR failed');
-    ocrText.value = data.raw_text || '';
-    ocrStatus.textContent = 'Done.';
+    
+    ocrText.value = data.text || '';
+    ocrStatus.className = 'status success';
+    ocrStatus.textContent = '✅ Text extracted! Edit if needed, then click "Use Text in Food Log"';
+    
   }catch(e){
-    ocrStatus.textContent = 'Error: ' + e.message;
+    ocrStatus.className = 'status error';
+    ocrStatus.textContent = '❌ Error: ' + e.message;
   }finally{
-    btnOcr.disabled = false;
+    btnUseCameraOcr.disabled = false;
   }
-});
+}
 </script>
 </body>
 </html>
-

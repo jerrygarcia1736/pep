@@ -3,110 +3,175 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>{{ title or "Scan Peptides" }}</title>
+  <title>💉 Scan Peptides</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:18px;max-width:760px}
-    h1{font-size:22px;margin:0 0 6px}
-    .sub{color:#555;font-size:13px;margin:0 0 14px;line-height:1.35}
-    .card{border:1px solid #e6e6e6;border-radius:16px;padding:14px}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    input[type=file]{max-width:100%}
-    button{padding:10px 12px;border:1px solid #111;background:#111;color:#fff;border-radius:12px;cursor:pointer}
-    button.secondary{background:#fff;color:#111}
-    button:disabled{opacity:.55;cursor:not-allowed}
-    textarea{width:100%;min-height:120px;margin-top:10px;font-family:ui-monospace,Menlo,monospace;border:1px solid #ddd;border-radius:12px;padding:10px}
-    .hint{color:#666;font-size:12px;margin-top:8px}
-    .status{margin-top:10px;color:#444}
-    .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-    .chip{border:1px solid #ddd;border-radius:999px;padding:7px 10px;background:#fff;cursor:pointer}
-    .chip:hover{border-color:#999}
-    .chip b{font-weight:700}
-    .score{color:#666;font-size:12px;margin-left:6px}
-    .footer{margin-top:12px;color:#666;font-size:12px}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0 auto;max-width:760px;padding:18px;background:#f8f9fa}
+    h1{font-size:22px;margin:0 0 8px;display:flex;align-items:center;gap:8px}
+    .sub{color:#555;font-size:14px;margin:0 0 16px;line-height:1.5}
+    .card{border:1px solid #e0e0e0;border-radius:16px;padding:16px;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
+    input[type=file]{display:none}
+    .file-input-label{display:inline-flex;align-items:center;gap:8px;padding:12px 16px;background:#fff;border:2px solid #111;border-radius:12px;cursor:pointer;font-weight:600;transition:all .2s}
+    .file-input-label:hover{background:#f5f5f5}
+    button{padding:12px 16px;border:none;background:#111;color:#fff;border-radius:12px;cursor:pointer;font-weight:600;font-size:14px;transition:all .2s}
+    button:hover{background:#333}
+    button.secondary{background:#fff;color:#111;border:2px solid #111}
+    button.secondary:hover{background:#f5f5f5}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    button.camera-btn{background:#4f46e5;font-size:16px}
+    button.camera-btn:hover{background:#4338ca}
+    textarea{width:100%;min-height:120px;margin-top:12px;font-family:ui-monospace,Menlo,monospace;border:2px solid #e0e0e0;border-radius:12px;padding:12px;font-size:14px;resize:vertical}
+    .hint{color:#666;font-size:13px;margin:10px 0 0;padding:8px 12px;background:#f0f0f0;border-radius:8px;line-height:1.4}
+    .status{margin-top:12px;padding:10px 14px;border-radius:8px;font-size:14px;font-weight:600}
+    .status.loading{background:#fef3c7;color:#92400e}
+    .status.success{background:#d1fae5;color:#065f46}
+    .status.error{background:#fee2e2;color:#991b1b}
+    .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+    .chip{border:2px solid #e0e0e0;border-radius:999px;padding:10px 14px;background:#fff;cursor:pointer;transition:all .2s}
+    .chip:hover{border-color:#4f46e5;transform:translateY(-2px);box-shadow:0 4px 12px rgba(79,70,229,.15)}
+    .chip b{font-weight:700;font-size:15px}
+    .score{color:#4f46e5;font-size:13px;margin-left:6px;font-weight:700}
+    .footer{margin-top:14px;color:#666;font-size:13px;padding:10px;background:#f0f0f0;border-radius:8px}
+    .spinner{border:3px solid #f3f3f3;border-top:3px solid #4f46e5;border-radius:50%;width:24px;height:24px;animation:spin .8s linear infinite;display:inline-block;margin-right:8px}
+    @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+    img.preview{max-width:100%;border-radius:12px;border:2px solid #e0e0e0;margin-top:12px}
   </style>
 </head>
 <body>
-  <h1>{{ title or "Scan Peptides" }}</h1>
-  <p class="sub">Take a photo of your kit/box label (handwritten or printed). We’ll extract text and suggest peptide matches. Always confirm before saving.</p>
+  <h1>💉 Scan Peptides</h1>
+  <p class="sub">Take a photo of your peptide vial label (printed or handwritten). We'll extract text and match it to known peptides.</p>
 
   <div class="card">
+    <input id="imageInput" type="file" accept="image/*" capture="environment" />
     <div class="row">
-      <input id="imageInput" type="file" accept="image/*" capture="environment" />
-      <button id="btnOcr" type="button">Scan Label</button>
-      <button id="btnClear" class="secondary" type="button">Clear</button>
+      <button id="btnUseCamera" class="camera-btn" type="button">📸 Use Camera</button>
+      <label for="imageInput" class="file-input-label">📁 Choose File</label>
+      <button id="btnClear" class="secondary" type="button">🗑️ Clear</button>
     </div>
 
-    <div class="hint">Tip: fill the frame with the label, steady hands, bright light. If it’s handwritten, use thick marker.</div>
+    <div class="hint">💡 Tip: Fill frame with label, use steady hands, bright light. For handwriting, use thick marker.</div>
 
-    <div id="status" class="status"></div>
+    <div id="status" class="status" style="display:none"></div>
 
-    <textarea id="ocrText" placeholder="OCR results will appear here..."></textarea>
+    <div id="previewWrap" style="display:none;">
+      <img id="preview" class="preview" alt="preview"/>
+    </div>
 
-    <div style="margin-top:10px;font-weight:700">Suggestions</div>
+    <textarea id="ocrText" placeholder="Extracted text will appear here..."></textarea>
+
+    <div style="margin-top:12px;font-weight:700;font-size:15px">💊 Peptide Matches</div>
     <div id="candidates" class="chips"></div>
 
     <div class="footer">
-      Tap a suggestion to copy it to your clipboard, or use the text above.
-      Next: paste into Add Vial / Inventory.
+      💡 Tap a suggestion to copy it, then paste into Add Vial or Inventory screens.
     </div>
   </div>
 
 <script>
 const imageInput = document.getElementById('imageInput');
-const btnOcr = document.getElementById('btnOcr');
+const btnUseCamera = document.getElementById('btnUseCamera');
 const btnClear = document.getElementById('btnClear');
 const status = document.getElementById('status');
+const previewWrap = document.getElementById('previewWrap');
+const preview = document.getElementById('preview');
 const ocrText = document.getElementById('ocrText');
 const candidates = document.getElementById('candidates');
 
+// Use Camera button triggers file input
+btnUseCamera.addEventListener('click', () => {
+  imageInput.click();
+});
+
+// Auto-scan when image selected
+imageInput.addEventListener('change', async () => {
+  const file = imageInput.files && imageInput.files[0];
+  if (!file) {
+    previewWrap.style.display = 'none';
+    return;
+  }
+  
+  const url = URL.createObjectURL(file);
+  preview.src = url;
+  previewWrap.style.display = 'block';
+  
+  // Auto-scan
+  await performScan(file);
+});
+
 function clearAll(){
   imageInput.value = '';
-  status.textContent = '';
+  status.style.display = 'none';
+  previewWrap.style.display = 'none';
   ocrText.value = '';
   candidates.innerHTML = '';
 }
 btnClear.addEventListener('click', clearAll);
 
 async function copyToClipboard(text){
-  try{ await navigator.clipboard.writeText(text); status.textContent = `Copied: ${text}`; }
-  catch{ status.textContent = 'Copy failed. You can manually select and copy.'; }
+  try{ 
+    await navigator.clipboard.writeText(text); 
+    status.className = 'status success';
+    status.style.display = 'block';
+    status.textContent = `✅ Copied: ${text}`; 
+  }
+  catch{ 
+    status.className = 'status error';
+    status.style.display = 'block';
+    status.textContent = '❌ Copy failed. Select and copy manually.'; 
+  }
 }
 
-btnOcr.addEventListener('click', async () => {
-  const file = imageInput.files && imageInput.files[0];
-  if (!file){ status.textContent = 'Choose a photo first.'; return; }
-  btnOcr.disabled = true;
+async function performScan(file){
+  if (!file) return;
+  
+  btnUseCamera.disabled = true;
   candidates.innerHTML = '';
+  status.className = 'status loading';
+  status.style.display = 'block';
+  status.innerHTML = '<span class="spinner"></span>Scanning label...';
+  
   try{
-    status.textContent = 'Uploading...';
     const form = new FormData();
     form.append('image', file);
-    const res = await fetch('{{ api_endpoint }}', { method:'POST', body: form });
+    
+    const res = await fetch('/api/scan-peptide-label', { 
+      method: 'POST', 
+      body: form 
+    });
+    
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'OCR failed');
+    
+    if (!res.ok) throw new Error(data.error || 'Scan failed');
 
     ocrText.value = data.raw_text || '';
 
-    const list = (data.candidates || []);
+    const list = (data.matches || []);
+    
     if (list.length === 0){
-      status.textContent = 'Done. No peptide matches found—try a clearer photo or edit the text.';
+      status.className = 'status error';
+      status.textContent = '❌ No peptide matches found. Try clearer photo or edit text above.';
       return;
     }
-    status.textContent = 'Done. Tap a suggestion:';
+    
+    status.className = 'status success';
+    status.textContent = '✅ Found ' + list.length + ' matches! Tap to copy:';
+    
     list.forEach(item => {
       const chip = document.createElement('div');
       chip.className = 'chip';
-      const score = Math.round((item.score || 0) * 100);
+      const score = Math.round((item.confidence || 0) * 100);
       chip.innerHTML = `<b>${item.name}</b><span class="score">${score}%</span>`;
       chip.addEventListener('click', () => copyToClipboard(item.name));
       candidates.appendChild(chip);
     });
+    
   }catch(e){
-    status.textContent = 'Error: ' + e.message;
+    status.className = 'status error';
+    status.textContent = '❌ Error: ' + e.message;
   }finally{
-    btnOcr.disabled = false;
+    btnUseCamera.disabled = false;
   }
-});
+}
 </script>
 </body>
 </html>
