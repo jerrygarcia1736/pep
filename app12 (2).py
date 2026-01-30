@@ -1160,20 +1160,12 @@ def reset_password(token):
 @app.route("/profile-setup", methods=["GET", "POST"])
 @login_required
 def profile_setup():
-    """User profile setup/edit page - SKIPPABLE"""
+    """User profile setup/edit page"""
     db = get_session(db_url)
     try:
         profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
         
         if request.method == "POST":
-            # Check if user clicked "Skip for Now"
-            action = request.form.get("action", "save")
-            
-            if action == "skip":
-                flash("Profile setup skipped. You can complete it anytime from settings!", "info")
-                return redirect(url_for("dashboard"))
-            
-            # Otherwise save the profile (all fields now optional)
             age = request.form.get("age")
             weight_lbs = request.form.get("weight_lbs")
             height_inches = request.form.get("height_inches")
@@ -1182,34 +1174,34 @@ def profile_setup():
             experience_level = request.form.get("experience_level")
             medical_notes = request.form.get("medical_notes", "").strip()
             
+            if not all([age, weight_lbs, height_inches, gender, experience_level]):
+                flash("Please fill in all required fields.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
+            if not goals:
+                flash("Please select at least one goal.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
             if profile:
-                # Update existing profile
-                if age:
-                    profile.age = int(age)
-                if weight_lbs:
-                    profile.weight_lbs = float(weight_lbs)
-                if height_inches:
-                    profile.height_inches = int(height_inches)
-                if gender:
-                    profile.gender = gender
-                if goals:
-                    profile.goals = ",".join(goals)  # Store as comma-separated string
-                if experience_level:
-                    profile.experience_level = experience_level
+                profile.age = int(age)
+                profile.weight_lbs = float(weight_lbs)
+                profile.height_inches = int(height_inches)
+                profile.gender = gender
+                profile.goals = json.dumps(goals)
+                profile.experience_level = experience_level
                 profile.medical_notes = medical_notes
                 profile.completed_at = datetime.utcnow()
                 profile.updated_at = datetime.utcnow()
                 flash("Profile updated successfully!", "success")
             else:
-                # Create new profile (all fields optional)
                 profile = UserProfile(
                     user_id=session["user_id"],
-                    age=int(age) if age else None,
-                    weight_lbs=float(weight_lbs) if weight_lbs else None,
-                    height_inches=int(height_inches) if height_inches else None,
-                    gender=gender if gender else None,
-                    goals=",".join(goals) if goals else None,
-                    experience_level=experience_level if experience_level else None,
+                    age=int(age),
+                    weight_lbs=float(weight_lbs),
+                    height_inches=int(height_inches),
+                    gender=gender,
+                    goals=json.dumps(goals),
+                    experience_level=experience_level,
                     medical_notes=medical_notes,
                     completed_at=datetime.utcnow()
                 )
@@ -1221,11 +1213,6 @@ def profile_setup():
         
         return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
         
-    except Exception as e:
-        print(f"Profile setup error: {e}")
-        db.rollback()
-        flash("Error saving profile. Please try again.", "error")
-        return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=None)
     finally:
         db.close()
 
@@ -1237,14 +1224,6 @@ def get_user_profile(user_id):
         return db.query(UserProfile).filter_by(user_id=user_id).first()
     finally:
         db.close()
-
-
-@app.route("/profile-setup/skip", methods=["GET", "POST"])
-@login_required
-def profile_setup_skip():
-    """Direct skip route - allows skipping profile setup"""
-    flash("Profile setup skipped. You can complete it anytime from settings!", "info")
-    return redirect(url_for("dashboard"))
 
 
 
