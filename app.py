@@ -18,6 +18,7 @@ from functools import wraps
 from typing import Any, Dict, List, Tuple
 
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, render_template_string
+import base64
 from werkzeug.security import generate_password_hash, check_password_hash
 from jinja2 import TemplateNotFound
 
@@ -29,6 +30,82 @@ from models import get_session, create_engine, Base as ModelBase
 from nutrition_api import register_nutrition_routes
 from confidence import compute_injection_confidence
 
+
+def _openai_identify_food_from_image(image_b64: str, mime_type: str = "image/jpeg") -> dict:
+    """Identify a food item from an image using the OpenAI Responses API.
+
+    Returns dict: {name, confidence, alternatives, notes}
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not set"}
+
+    # Use a vision-capable model available on the Responses API.
+    model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4.1-mini")
+
+    data_url = f"data:{mime_type};base64,{image_b64}"
+
+    prompt = (
+        "You are a food recognition assistant. "
+        "Identify the most likely food in the image. "
+        "Return STRICT JSON with keys: "
+        "name (string), confidence (number 0-1), alternatives (array of strings), "
+        "and notes (short string). "
+        "If multiple foods are present, pick the primary one and mention others in notes. "
+        "No markdown, no extra text."
+    )
+
+    payload = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_image", "image_url": data_url}
+                ],
+            }
+        ],
+    }
+
+    r = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=45,
+    )
+    if r.status_code >= 400:
+        return {"error": f"OpenAI API error {r.status_code}", "details": r.text[:2000]}
+
+    resp = r.json()
+    # Responses API commonly provides output_text convenience in some SDKs; raw JSON has output items.
+    # We'll extract text from output content parts.
+    text_parts = []
+    for item in resp.get("output", []) or []:
+        for c in item.get("content", []) or []:
+            if c.get("type") in ("output_text", "text"):
+                text_parts.append(c.get("text", ""))
+    out_text = "\n".join([t for t in text_parts if t]).strip()
+
+    if not out_text:
+        # fallback: some responses may include 'output_text' at top-level in docs examples
+        out_text = (resp.get("output_text") or "").strip()
+
+    if not out_text:
+        return {"error": "No text returned from model"}
+
+    # Parse JSON safely
+    try:
+        return json.loads(out_text)
+    except Exception:
+        # try to locate a JSON object in the text
+        m = re.search(r"\{.*\}", out_text, flags=re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+        return {"error": "Model returned non-JSON", "raw": out_text[:2000]}
 
 # -----------------------------------------------------------------------------
 # Flask app
@@ -255,17 +332,16 @@ def has_accepted_disclaimer(user_id: int) -> bool:
         db.close()
 
 def require_onboarding(view_func):
+    """Lightweight gate: requires login, but does NOT force onboarding redirects.
+
+    Profile + disclaimer are optional and can be completed later.
+    Individual features can check profile/disclaimer as needed.
+    """
     @wraps(view_func)
     def wrapper(*args, **kwargs):
         u = get_current_user()
         if not u:
             return redirect(url_for("login"))
-        # Step 1: profile
-        if not is_profile_complete(u.id) and request.endpoint not in {"profile_setup", "logout", "onboarding_step_1", "onboarding_step_2", "medical_disclaimer"}:
-            return redirect(url_for("onboarding_step_1"))
-        # Step 2: disclaimer acknowledgement
-        if is_profile_complete(u.id) and not has_accepted_disclaimer(u.id) and request.endpoint not in {"onboarding_step_2", "logout", "medical_disclaimer"}:
-            return redirect(url_for("onboarding_step_2"))
         return view_func(*args, **kwargs)
     return wrapper
 
@@ -481,11 +557,188 @@ PROTOCOL_TEMPLATES: dict[str, dict[str, str]] = {
 # - Scan Peptides: OCR text -> match to known peptides
 # -----------------------------------------------------------------------------
 
+@app.route("/scan-food-photo", methods=["GET"])
+@login_required
+def scan_food_photo():
+    # Photo-of-food recognition (no label). Uses OpenAI vision + quick portion prompt.
+    html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Photo of Food</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    h1{font-size:20px;margin:0 0 6px;}
+    .muted{color:#666;font-size:13px;line-height:1.4}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:800; cursor:pointer;}
+    .btn.secondary{background:#fff;color:#111827;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    input[type=file]{width:100%;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
+    img{max-width:100%; border-radius:12px; border:1px solid #e6e6ef; margin-top:10px;}
+    select,input{width:100%; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .pill{display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; font-size:12px; color:#111827;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📸 Photo of Food</h1>
+    <div class="muted">Snap a photo (e.g., an apple). We’ll identify it, then you pick a portion size.</div>
+
+    <div class="box">
+      <div class="muted"><b>Accuracy tips:</b> good light, food centered, avoid motion blur, fill the frame.</div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <input id="foodPhoto" type="file" accept="image/*" capture="environment" />
+      <img id="preview" style="display:none;" alt="preview"/>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="btnIdentify" type="button" disabled>✨ Identify</button>
+      <a class="btn secondary" href="/scan-food">🏷️ Scan Label</a>
+    </div>
+
+    <div style="margin-top:10px;">
+      <span class="pill" id="status">Waiting for photo…</span>
+    </div>
+
+    <div id="resultBox" style="display:none; margin-top:12px;">
+      <div class="box">
+        <div class="muted"><b>Detected:</b> <span id="foodName"></span> <span class="muted" id="conf"></span></div>
+        <div class="muted" id="alts" style="margin-top:6px;"></div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <label class="muted">Portion</label>
+        <select id="portion">
+          <option value="1 small">1 small</option>
+          <option value="1 medium" selected>1 medium</option>
+          <option value="1 large">1 large</option>
+          <option value="100 g">100 g</option>
+          <option value="200 g">200 g</option>
+        </select>
+      </div>
+
+      <form id="logFoodForm" method="post" action="/log-food" style="margin-top:10px;">
+        <input type="hidden" name="food_description" id="food_description" value="">
+        <button class="btn" type="submit">➕ Log Food</button>
+        <div class="muted" style="margin-top:8px;">We’ll prefill your log with the identified food + portion.</div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const foodPhoto = document.getElementById("foodPhoto");
+    const btnIdentify = document.getElementById("btnIdentify");
+    const preview = document.getElementById("preview");
+    const status = document.getElementById("status");
+
+    const resultBox = document.getElementById("resultBox");
+    const foodName = document.getElementById("foodName");
+    const conf = document.getElementById("conf");
+    const alts = document.getElementById("alts");
+    const portion = document.getElementById("portion");
+    const food_description = document.getElementById("food_description");
+    const logFoodForm = document.getElementById("logFoodForm");
+
+    let lastResult = null;
+
+    function setStatus(t){ status.textContent = t; }
+
+    foodPhoto.addEventListener("change", () => {
+      const file = foodPhoto.files && foodPhoto.files[0];
+      btnIdentify.disabled = !file;
+      resultBox.style.display = "none";
+      lastResult = null;
+      if (!file){
+        preview.style.display = "none";
+        setStatus("Waiting for photo…");
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      preview.src = url;
+      preview.style.display = "block";
+      setStatus("Ready to identify.");
+    });
+
+    btnIdentify.addEventListener("click", async () => {
+      const file = foodPhoto.files && foodPhoto.files[0];
+      if (!file) return;
+
+      btnIdentify.disabled = true;
+      setStatus("Identifying…");
+
+      try{
+        const fd = new FormData();
+        fd.append("photo", file);
+
+        const r = await fetch("/api/food-photo-identify", {
+          method: "POST",
+          body: fd
+        });
+
+        const j = await r.json();
+        if (!r.ok || j.error){
+          console.error(j);
+          alert("Identify failed: " + (j.error || "unknown"));
+          setStatus("Identify failed.");
+          return;
+        }
+        lastResult = j;
+        foodName.textContent = j.name || "Unknown";
+        conf.textContent = (typeof j.confidence === "number") ? ` (confidence ${(j.confidence*100).toFixed(0)}%)` : "";
+        alts.textContent = (j.alternatives && j.alternatives.length) ? ("Alternatives: " + j.alternatives.join(", ")) : "";
+        resultBox.style.display = "block";
+        setStatus("Review and log.");
+      }catch(e){
+        console.error(e);
+        alert("Identify failed. Try again.");
+        setStatus("Identify failed.");
+      }finally{
+        btnIdentify.disabled = false;
+      }
+    });
+
+    logFoodForm.addEventListener("submit", () => {
+      const name = (lastResult && lastResult.name) ? lastResult.name : "food";
+      const p = portion.value || "1 serving";
+      food_description.value = `${name} — ${p}`;
+    });
+  </script>
+</body>
+</html>"""
+    return render_template_string(html)
+
+
+@app.route("/api/food-photo-identify", methods=["POST"])
+@login_required
+def api_food_photo_identify():
+    if "photo" not in request.files:
+        return jsonify({"error": "No photo uploaded"}), 400
+
+    f = request.files["photo"]
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    data = f.read()
+    if not data:
+        return jsonify({"error": "Empty file"}), 400
+
+    # Basic mime detection
+    mime = f.mimetype or "image/jpeg"
+    img_b64 = base64.b64encode(data).decode("utf-8")
+
+    result = _openai_identify_food_from_image(img_b64, mime_type=mime)
+    status = 200 if "error" not in result else 500
+    return jsonify(result), status
+
 @app.route("/scan-food", methods=["GET"])
 @login_required
 def scan_food():
-    # iOS-friendly camera + higher OCR accuracy via crop + preprocessing.
-    # Posts into /log-food via existing form fields (food_description).
+    # Posts recognized food directly into /log-food via form POST (no template changes needed)
     html = """<!doctype html>
 <html>
 <head>
@@ -493,354 +746,419 @@ def scan_food():
   <title>Scan Food</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
-    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:860px; margin:0 auto;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
     h1{font-size:20px;margin:0 0 6px;}
     .muted{color:#666;font-size:13px;line-height:1.4}
+    .tabs{display:flex; gap:8px; margin:14px 0;}
+    .tab{flex:1; padding:10px 12px; border-radius:12px; border:1px solid #e6e6ef; background:#fafafe; cursor:pointer; font-weight:600;}
+    .tab.active{background:#eef2ff; border-color:#c7d2fe;}
+    .panel{display:none; margin-top:10px;}
+    .panel.active{display:block;}
     input[type=file]{width:100%;}
-    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:800; cursor:pointer;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
     .btn.secondary{background:#fff;color:#111827;}
     .btn:disabled{opacity:.5;cursor:not-allowed;}
     .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
     .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
-    textarea{width:100%; min-height:110px; padding:10px; border-radius:12px; border:1px solid #e6e6ef; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;}
-    .grid{display:grid; grid-template-columns:1fr; gap:12px; margin-top:12px;}
-    @media(min-width:900px){ .grid{grid-template-columns: 1.2fr .8fr;} }
-    .canvasWrap{position:relative; width:100%; border-radius:12px; overflow:hidden; border:1px solid #e6e6ef; background:#fff;}
-    canvas{width:100%; height:auto; display:block; touch-action:none;}
-    .help{display:grid; gap:6px; margin-top:10px;}
-    .help li{margin-left:16px;}
-    .kv{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
-    .kv label{font-size:12px;color:#666;}
-    .kv input{width:100%; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
-    .pill{display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; font-size:12px; color:#111827;}
+    img{max-width:100%; border-radius:12px; border:1px solid #e6e6ef;}
+    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>🍎 Scan Food (High Accuracy)</h1>
-    <div class="muted">Take a photo of a <b>nutrition label</b> or <b>ingredients panel</b>. Then drag a box to crop the label for better OCR.</div>
-
-    <div class="box">
-      <div class="muted"><b>Photo checklist (big accuracy boost):</b></div>
-      <ul class="help muted">
-        <li>Fill the frame with the label (get close).</li>
-        <li>Use bright light / flash indoors.</li>
-        <li>Keep the label flat and square (avoid angles).</li>
-        <li>Avoid glare (tilt slightly if shiny).</li>
-      </ul>
-    </div>
-
-    <div style="margin-top:10px;">
-      <input id="foodPhoto" type="file" accept="image/*" capture="environment" />
-    </div>
-
-    <div class="grid">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div>
-        <div class="muted" style="margin:6px 0 8px;"><b>Crop the label</b> (drag to select). If you skip cropping, we’ll OCR the whole image.</div>
-        <div class="canvasWrap">
-          <canvas id="imgCanvas"></canvas>
-        </div>
-
-        <div class="row">
-          <button class="btn" id="btnOcr" type="button" disabled>🔎 OCR Label</button>
-          <button class="btn secondary" id="btnReset" type="button" disabled>↩️ Reset Crop</button>
-          <span class="pill" id="statusPill">Waiting for photo…</span>
-        </div>
-
-        <div style="margin-top:10px;">
-          <textarea id="ocrText" placeholder="OCR text will appear here..."></textarea>
-        </div>
+        <h1>📸 Scan Food</h1>
+        <div class="muted">Snap a photo of the food for a best-guess label, or use OCR for receipts/labels. You’ll confirm before logging.</div>
       </div>
+      <div class="toplinks">
+        <a class="linkbtn" href="/nutrition">🍎 Nutrition</a>
+        <a class="linkbtn" href="/pep-ai">🤖 Pep AI</a>
+      </div>
+    </div>
 
-      <div>
-        <div class="muted" style="margin:6px 0 8px;"><b>Extracted nutrition (edit if needed)</b></div>
-        <div class="box">
-          <div class="kv">
-            <div>
-              <label>Serving size</label>
-              <input id="serving_size" placeholder="e.g., 2 tbsp (32g)"/>
+    <div class="tabs">
+      <button class="tab active" id="tab-photo" type="button">Photo (AI Guess)</button>
+      <button class="tab" id="tab-ocr" type="button">Text (OCR)</button>
+    </div>
+
+    <div class="panel active" id="panel-photo">
+      <div class="box"><div class="muted"><b>Tip:</b> Fill the frame with the food. Good lighting helps.</div></div>
+      <div style="margin-top:10px;">
+        <input id="foodPhoto" type="file" accept="image/*" capture="environment" capture="environment" />
+      
+          <div class="mt-3">
+            <div class="d-flex flex-wrap gap-2">
+              <button type="button" class="btn btn-outline-primary" id="openFoodCameraBtn">
+                <i class="bi bi-camera"></i> Use Camera
+              </button>
+              <button type="button" class="btn btn-outline-secondary d-none" id="captureFoodFrameBtn">
+                <i class="bi bi-circle-fill"></i> Capture Photo
+              </button>
+              <button type="button" class="btn btn-outline-danger d-none" id="stopFoodCameraBtn">
+                <i class="bi bi-x-circle"></i> Stop
+              </button>
             </div>
-            <div>
-              <label>Calories</label>
-              <input id="calories" placeholder="e.g., 120"/>
-            </div>
-            <div>
-              <label>Protein (g)</label>
-              <input id="protein_g" placeholder="e.g., 8"/>
-            </div>
-            <div>
-              <label>Carbs (g)</label>
-              <input id="carbs_g" placeholder="e.g., 14"/>
-            </div>
-            <div>
-              <label>Fat (g)</label>
-              <input id="fat_g" placeholder="e.g., 5"/>
-            </div>
-            <div>
-              <label>Sodium (mg)</label>
-              <input id="sodium_mg" placeholder="e.g., 180"/>
+
+            <div class="mt-3 d-none" id="foodCameraWrap">
+              <video id="foodCameraStream" playsinline autoplay class="w-100 rounded border"></video>
+              <canvas id="foodCameraCanvas" class="d-none"></canvas>
             </div>
           </div>
-        </div>
+</div>
+      <div id="photoPreview" style="margin-top:10px; display:none;">
+        <img id="previewImg" />
+      </div>
 
-        <form id="logFoodForm" method="post" action="/log-food" style="margin-top:10px;">
-          <input type="hidden" name="food_description" id="food_description" value="">
-          <button class="btn" type="submit">➕ Log Food</button>
-          <div class="muted" style="margin-top:8px;">We’ll send a prefilled description to your existing food log.</div>
-        </form>
+      <div class="row">
+        <button class="btn" id="btnGuess" type="button" disabled>🤖 Guess Food</button>
+        <button class="btn secondary" id="btnClear" type="button" disabled>Clear</button>
+      </div>
 
-        <div class="box" style="margin-top:10px;">
-          <div class="muted"><b>If OCR struggles:</b> retake closer + brighter, then crop tighter around the text.</div>
-        </div>
+      <div id="guessBox" class="box" style="display:none;">
+        <div class="muted" style="margin-bottom:6px;"><b>Tap a guess to log:</b></div>
+        <div id="guessChips" class="row"></div>
       </div>
     </div>
+
+    <div class="panel" id="panel-ocr">
+      <div class="box"><div class="muted"><b>Use OCR</b> for receipts, labels, or written notes (e.g., “apple, 1 medium”).</div></div>
+      <div style="margin-top:10px;">
+        <input id="ocrPhoto" type="file" accept="image/*" capture="environment" />
+      </div>
+      <div class="row">
+        <button class="btn" id="btnOcr" type="button" disabled>🔎 Extract Text</button>
+      </div>
+      <div style="margin-top:10px;">
+        <textarea id="ocrText" placeholder="OCR text will appear here..."></textarea>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnLogOcr" type="button" disabled>✅ Log This Text</button>
+      </div>
+    </div>
+
+    <form id="logFoodForm" method="post" action="/log-food" style="display:none;">
+      <input type="hidden" name="food_description" id="food_description" value="" />
+    </form>
   </div>
 
+  <!-- TFJS + MobileNet (open source, browser-side) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js">
+      // --- Mobile camera support (direct capture) ---
+      let cameraStream = null;
+
+      async function startCamera() {
+        const wrap = document.getElementById('cameraWrap');
+        const video = document.getElementById('cameraStream');
+        const openBtn = document.getElementById('openCameraBtn');
+        const capBtn = document.getElementById('captureFrameBtn');
+        const stopBtn = document.getElementById('stopCameraBtn');
+
+        try {
+          cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false
+          });
+          video.srcObject = cameraStream;
+          wrap.classList.remove('d-none');
+          capBtn.classList.remove('d-none');
+          stopBtn.classList.remove('d-none');
+          openBtn.classList.add('d-none');
+        } catch (e) {
+          console.error(e);
+          alert("Could not access camera. You can still use the Upload Photo option.");
+        }
+      }
+
+      function stopCamera() {
+        const wrap = document.getElementById('cameraWrap');
+        const openBtn = document.getElementById('openCameraBtn');
+        const capBtn = document.getElementById('captureFrameBtn');
+        const stopBtn = document.getElementById('stopCameraBtn');
+        const video = document.getElementById('cameraStream');
+
+        if (cameraStream) {
+          cameraStream.getTracks().forEach(t => t.stop());
+          cameraStream = null;
+        }
+        video.srcObject = null;
+        wrap.classList.add('d-none');
+        capBtn.classList.add('d-none');
+        stopBtn.classList.add('d-none');
+        openBtn.classList.remove('d-none');
+      }
+
+      function capturePhotoToFileInput() {
+        const video = document.getElementById('cameraStream');
+        const canvas = document.getElementById('cameraCanvas');
+        const input = document.getElementById('peptidePhoto');
+
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+
+        canvas.toBlob(blob => {
+          if (!blob) return;
+          // Create a File and set it to the file input so existing OCR flow works.
+          const file = new File([blob], "camera.jpg", { type: "image/jpeg" });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+
+          // Trigger the same handler as upload selection.
+          const evt = new Event('change', { bubbles: true });
+          input.dispatchEvent(evt);
+
+          stopCamera();
+        }, "image/jpeg", 0.92);
+      }
+
+      document.getElementById('openCameraBtn')?.addEventListener('click', startCamera);
+      document.getElementById('stopCameraBtn')?.addEventListener('click', stopCamera);
+      document.getElementById('captureFrameBtn')?.addEventListener('click', capturePhotoToFileInput);
+      // Auto-open camera ONLY when arriving via nav click (?autocam=1) and only once per session for this page.
+      window.addEventListener('DOMContentLoaded', () => {
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches;
+        if (!isMobile) return;
+
+        const params = new URLSearchParams(window.location.search);
+        const wantsAuto = params.get('autocam') === '1';
+        if (!wantsAuto) return;
+
+        const key = 'autocam_once:/scan-peptides';
+        if (sessionStorage.getItem(key) === '1') return;
+
+        // Mark as used and remove the query param so refresh/back won't retrigger.
+        sessionStorage.setItem(key, '1');
+        try {
+          params.delete('autocam');
+          const newUrl = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '') + window.location.hash;
+          history.replaceState(null, '', newUrl);
+        } catch (e) {}
+
+        setTimeout(() => { startCamera(); }, 350);
+      });
+// --- Mobile camera support (direct capture) for Food ---
+      let foodCameraStreamObj = null;
+
+      async function startFoodCamera() {
+        const wrap = document.getElementById('foodCameraWrap');
+        const video = document.getElementById('foodCameraStream');
+        const openBtn = document.getElementById('openFoodCameraBtn');
+        const capBtn = document.getElementById('captureFoodFrameBtn');
+        const stopBtn = document.getElementById('stopFoodCameraBtn');
+
+        try {
+          foodCameraStreamObj = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false
+          });
+          video.srcObject = foodCameraStreamObj;
+          wrap.classList.remove('d-none');
+          capBtn.classList.remove('d-none');
+          stopBtn.classList.remove('d-none');
+          openBtn.classList.add('d-none');
+        } catch (e) {
+          console.error(e);
+          alert("Could not access camera. You can still use the Upload Photo option.");
+        }
+      }
+
+      function stopFoodCamera() {
+        const wrap = document.getElementById('foodCameraWrap');
+        const openBtn = document.getElementById('openFoodCameraBtn');
+        const capBtn = document.getElementById('captureFoodFrameBtn');
+        const stopBtn = document.getElementById('stopFoodCameraBtn');
+        const video = document.getElementById('foodCameraStream');
+
+        if (foodCameraStreamObj) {
+          foodCameraStreamObj.getTracks().forEach(t => t.stop());
+          foodCameraStreamObj = null;
+        }
+        video.srcObject = null;
+        wrap.classList.add('d-none');
+        capBtn.classList.add('d-none');
+        stopBtn.classList.add('d-none');
+        openBtn.classList.remove('d-none');
+      }
+
+      function captureFoodPhotoToFileInput() {
+        const video = document.getElementById('foodCameraStream');
+        const canvas = document.getElementById('foodCameraCanvas');
+        const input = document.getElementById('foodPhoto');
+
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+
+        canvas.toBlob(blob => {
+          if (!blob) return;
+          const file = new File([blob], "food_camera.jpg", { type: "image/jpeg" });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+
+          const evt = new Event('change', { bubbles: true });
+          input.dispatchEvent(evt);
+
+          stopFoodCamera();
+        }, "image/jpeg", 0.92);
+      }
+
+      document.getElementById('openFoodCameraBtn')?.addEventListener('click', startFoodCamera);
+      document.getElementById('stopFoodCameraBtn')?.addEventListener('click', stopFoodCamera);
+      document.getElementById('captureFoodFrameBtn')?.addEventListener('click', captureFoodPhotoToFileInput);
+    
+</script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+
+  <!-- Tesseract.js (open source OCR, browser-side) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
   <script>
+    const tabPhoto = document.getElementById("tab-photo");
+    const tabOcr   = document.getElementById("tab-ocr");
+    const panelPhoto = document.getElementById("panel-photo");
+    const panelOcr   = document.getElementById("panel-ocr");
+
+    function activate(which){
+      const isPhoto = which === "photo";
+      tabPhoto.classList.toggle("active", isPhoto);
+      tabOcr.classList.toggle("active", !isPhoto);
+      panelPhoto.classList.toggle("active", isPhoto);
+      panelOcr.classList.toggle("active", !isPhoto);
+    }
+    tabPhoto.addEventListener("click", () => activate("photo"));
+    tabOcr.addEventListener("click", () => activate("ocr"));
+
+    // ---- Photo (AI Guess) ----
     const foodPhoto = document.getElementById("foodPhoto");
-    const imgCanvas = document.getElementById("imgCanvas");
-    const ctx = imgCanvas.getContext("2d");
-    const btnOcr = document.getElementById("btnOcr");
-    const btnReset = document.getElementById("btnReset");
-    const ocrText = document.getElementById("ocrText");
-    const statusPill = document.getElementById("statusPill");
+    const preview = document.getElementById("photoPreview");
+    const previewImg = document.getElementById("previewImg");
+    const btnGuess = document.getElementById("btnGuess");
+    const btnClear = document.getElementById("btnClear");
+    const guessBox = document.getElementById("guessBox");
+    const guessChips = document.getElementById("guessChips");
 
-    const serving_size = document.getElementById("serving_size");
-    const calories = document.getElementById("calories");
-    const protein_g = document.getElementById("protein_g");
-    const carbs_g = document.getElementById("carbs_g");
-    const fat_g = document.getElementById("fat_g");
-    const sodium_mg = document.getElementById("sodium_mg");
+    let model = null;
+    let imgEl = null;
 
-    const food_description = document.getElementById("food_description");
-    const logFoodForm = document.getElementById("logFoodForm");
+    foodPhoto.addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
 
-    let img = new Image();
-    let imgLoaded = false;
-
-    let crop = null; // {x,y,w,h}
-    let dragging = false;
-    let dragStart = null;
-
-    function setStatus(text){ statusPill.textContent = text; }
-
-    function fitCanvasToImage(){
-      const maxW = 1000;
-      const scale = Math.min(1, maxW / img.naturalWidth);
-      imgCanvas.width = Math.round(img.naturalWidth * scale);
-      imgCanvas.height = Math.round(img.naturalHeight * scale);
-      redraw();
-    }
-
-    function redraw(){
-      ctx.clearRect(0,0,imgCanvas.width,imgCanvas.height);
-      if (!imgLoaded) return;
-      ctx.drawImage(img, 0, 0, imgCanvas.width, imgCanvas.height);
-
-      if (crop && crop.w>2 && crop.h>2){
-        ctx.save();
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(0,0,imgCanvas.width,imgCanvas.height);
-        ctx.clearRect(crop.x, crop.y, crop.w, crop.h);
-        ctx.restore();
-
-        ctx.save();
-        ctx.strokeStyle = "rgba(17,24,39,0.95)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(crop.x+1, crop.y+1, crop.w-2, crop.h-2);
-        ctx.restore();
-      }
-    }
-
-    function canvasPoint(e){
-      const rect = imgCanvas.getBoundingClientRect();
-      const cx = (e.clientX - rect.left) * (imgCanvas.width / rect.width);
-      const cy = (e.clientY - rect.top) * (imgCanvas.height / rect.height);
-      return {x: Math.max(0, Math.min(imgCanvas.width, cx)), y: Math.max(0, Math.min(imgCanvas.height, cy))};
-    }
-
-    function startDrag(e){
-      if (!imgLoaded) return;
-      dragging = true;
-      const p = canvasPoint(e);
-      dragStart = p;
-      crop = {x:p.x, y:p.y, w:0, h:0};
-      redraw();
-    }
-    function moveDrag(e){
-      if (!dragging || !dragStart) return;
-      const p = canvasPoint(e);
-      const x = Math.min(dragStart.x, p.x);
-      const y = Math.min(dragStart.y, p.y);
-      const w = Math.abs(dragStart.x - p.x);
-      const h = Math.abs(dragStart.y - p.y);
-      crop = {x, y, w, h};
-      redraw();
-    }
-    function endDrag(){
-      dragging = false;
-      dragStart = null;
-      redraw();
-    }
-
-    imgCanvas.addEventListener("pointerdown", (e)=>{ imgCanvas.setPointerCapture(e.pointerId); startDrag(e); });
-    imgCanvas.addEventListener("pointermove", (e)=>{ moveDrag(e); });
-    imgCanvas.addEventListener("pointerup", ()=>{ endDrag(); });
-    imgCanvas.addEventListener("pointercancel", ()=>{ endDrag(); });
-
-    btnReset.addEventListener("click", ()=>{
-      crop = null;
-      redraw();
-      setStatus("Crop cleared.");
-    });
-
-    foodPhoto.addEventListener("change", ()=>{
-      const file = foodPhoto.files && foodPhoto.files[0];
-      btnOcr.disabled = !file;
-      btnReset.disabled = !file;
-      ocrText.value = "";
-      serving_size.value = "";
-      calories.value = "";
-      protein_g.value = "";
-      carbs_g.value = "";
-      fat_g.value = "";
-      sodium_mg.value = "";
-      crop = null;
-      if (!file){
-        imgLoaded = false;
-        redraw();
-        setStatus("Waiting for photo…");
-        return;
-      }
       const url = URL.createObjectURL(file);
-      img = new Image();
-      img.onload = ()=>{
-        imgLoaded = true;
-        fitCanvasToImage();
-        setStatus("Drag to crop the label, then OCR.");
-      };
-      img.src = url;
+      previewImg.src = url;
+      preview.style.display = "block";
+      btnGuess.disabled = false;
+      btnClear.disabled = false;
+      guessBox.style.display = "none";
+      guessChips.innerHTML = "";
+
+      imgEl = new Image();
+      imgEl.src = url;
+      await new Promise(res => imgEl.onload = res);
     });
 
-    function preprocessToCanvas(srcCanvas, region){
-      const sx = region ? Math.max(0, region.x) : 0;
-      const sy = region ? Math.max(0, region.y) : 0;
-      const sw = region ? Math.max(1, region.w) : srcCanvas.width;
-      const sh = region ? Math.max(1, region.h) : srcCanvas.height;
+    btnClear.addEventListener("click", () => {
+      foodPhoto.value = "";
+      preview.style.display = "none";
+      btnGuess.disabled = true;
+      btnClear.disabled = true;
+      guessBox.style.display = "none";
+      guessChips.innerHTML = "";
+      imgEl = null;
+    });
 
-      const cropCanvas = document.createElement("canvas");
-      cropCanvas.width = sw;
-      cropCanvas.height = sh;
-      const cctx = cropCanvas.getContext("2d");
-      cctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
-
-      const targetW = Math.min(2000, Math.max(900, sw * 2));
-      const rScale = targetW / sw;
-      const targetH = Math.round(sh * rScale);
-
-      const out = document.createElement("canvas");
-      out.width = Math.round(targetW);
-      out.height = targetH;
-      const octx = out.getContext("2d");
-      octx.imageSmoothingEnabled = true;
-      octx.imageSmoothingQuality = "high";
-      octx.drawImage(cropCanvas, 0, 0, out.width, out.height);
-
-      const imgData = octx.getImageData(0,0,out.width,out.height);
-      const d = imgData.data;
-
-      const contrast = 1.35;
-      const thresh = 155;
-
-      for (let i=0; i<d.length; i+=4){
-        const r=d[i], g=d[i+1], b=d[i+2];
-        let v = 0.2126*r + 0.7152*g + 0.0722*b;
-        v = (v - 128) * contrast + 128;
-        v = Math.max(0, Math.min(255, v));
-        const bw = v > thresh ? 255 : 0;
-        d[i]=d[i+1]=d[i+2]=bw;
-      }
-      octx.putImageData(imgData, 0, 0);
-      return out;
+    function normalizeLabel(label){
+      label = (label || "").toLowerCase();
+      if (label.includes("apple")) return "apple";
+      if (label.includes("banana")) return "banana";
+      if (label.includes("orange")) return "orange";
+      if (label.includes("egg")) return "egg";
+      if (label.includes("pizza")) return "pizza";
+      if (label.includes("hamburger") || label.includes("cheeseburger")) return "hamburger";
+      return label.split(",")[0].split(" ")[0].trim();
     }
 
-    function parseNutrition(text){
-      const t = (text||"").replace(/\\r/g,"");
-      const lower = t.toLowerCase();
+    btnGuess.addEventListener("click", async () => {
+      if (!imgEl) return;
 
-      function m(re){
-        const mm = t.match(re);
-        return mm ? mm[1].trim() : "";
-      }
-      function num(re){
-        const mm = t.match(re);
-        return mm ? mm[1] : "";
-      }
-
-      const out = {
-        serving_size: m(/serving\\s*size[:\\s]*([^\\n]+)/i),
-        calories: num(/calories[^0-9]{0,8}([0-9]{1,4})/i),
-        protein_g: num(/protein[^0-9]{0,8}([0-9]+(?:\\.[0-9]+)?)\\s*g/i),
-        carbs_g: num(/(?:total\\s*)?carbohydrate[^0-9]{0,8}([0-9]+(?:\\.[0-9]+)?)\\s*g/i),
-        fat_g: num(/(?:total\\s*)?fat[^0-9]{0,8}([0-9]+(?:\\.[0-9]+)?)\\s*g/i),
-        sodium_mg: num(/sodium[^0-9]{0,8}([0-9]+(?:\\.[0-9]+)?)\\s*mg/i),
-      };
-
-      if (!out.calories){
-        const alt = lower.match(/\\b([0-9]{2,4})\\b\\s*(?:kcal|cal)\\b/i);
-        if (alt) out.calories = alt[1];
-      }
-      return out;
-    }
-
-    btnOcr.addEventListener("click", async ()=>{
-      if (!imgLoaded) return;
-      btnOcr.disabled = true;
-      btnReset.disabled = true;
-      setStatus("OCR running…");
-
+      btnGuess.disabled = true;
+      btnGuess.textContent = "Loading model...";
       try{
-        const useCrop = (crop && crop.w>40 && crop.h>40) ? crop : null;
-        const processed = preprocessToCanvas(imgCanvas, useCrop);
+        if (!model) model = await mobilenet.load();
+        btnGuess.textContent = "Analyzing...";
+        const preds = await model.classify(imgEl);
 
-        const result = await Tesseract.recognize(processed, "eng", {
-          logger: (m) => {}
+        guessChips.innerHTML = "";
+        preds.slice(0,5).forEach(p => {
+          const term = normalizeLabel(p.className);
+          const chip = document.createElement("div");
+          chip.className = "chip";
+          chip.textContent = `${term} (${Math.round(p.probability*100)}%)`;
+          chip.addEventListener("click", () => {
+            document.getElementById("food_description").value = term;
+            document.getElementById("logFoodForm").submit();
+          });
+          guessChips.appendChild(chip);
         });
-        const text = (result && result.data && result.data.text) ? result.data.text.trim() : "";
+
+        guessBox.style.display = "block";
+      }catch(err){
+        alert("Food guess failed. Try again with better lighting and closer framing.");
+      }finally{
+        btnGuess.disabled = false;
+        btnGuess.textContent = "🤖 Guess Food";
+      }
+    });
+
+    // ---- OCR (Text) ----
+    const ocrPhoto = document.getElementById("ocrPhoto");
+    const btnOcr = document.getElementById("btnOcr");
+    const ocrText = document.getElementById("ocrText");
+    const btnLogOcr = document.getElementById("btnLogOcr");
+
+    ocrPhoto.addEventListener("change", () => {
+      const file = ocrPhoto.files && ocrPhoto.files[0];
+      btnOcr.disabled = !file;
+      btnLogOcr.disabled = true;
+      ocrText.value = "";
+    });
+
+    btnOcr.addEventListener("click", async () => {
+      const file = ocrPhoto.files && ocrPhoto.files[0];
+      if (!file) return;
+
+      btnOcr.disabled = true;
+      btnOcr.textContent = "Running OCR...";
+      try{
+        const { data } = await Tesseract.recognize(file, "eng");
+        const text = (data && data.text) ? data.text.trim() : "";
         ocrText.value = text;
-
-        const parsed = parseNutrition(text);
-        serving_size.value = parsed.serving_size || serving_size.value;
-        calories.value = parsed.calories || calories.value;
-        protein_g.value = parsed.protein_g || protein_g.value;
-        carbs_g.value = parsed.carbs_g || carbs_g.value;
-        fat_g.value = parsed.fat_g || fat_g.value;
-        sodium_mg.value = parsed.sodium_mg || sodium_mg.value;
-
-        setStatus(text ? "OCR complete. Review fields, then log." : "No text found — retake and crop tighter.");
-      }catch(e){
-        console.error(e);
-        setStatus("OCR failed.");
-        alert("OCR failed. Try retaking the photo with brighter light and tighter crop.");
+        btnLogOcr.disabled = text.length < 2;
+      }catch(err){
+        alert("OCR failed. Try again with brighter lighting and closer focus.");
       }finally{
         btnOcr.disabled = false;
-        btnReset.disabled = false;
+        btnOcr.textContent = "🔎 Extract Text";
       }
     });
 
-    logFoodForm.addEventListener("submit", (e)=>{
-      const parts = [];
-      if (serving_size.value) parts.push("Serving: " + serving_size.value);
-      if (calories.value) parts.push("Calories: " + calories.value);
-      if (protein_g.value) parts.push("Protein: " + protein_g.value + "g");
-      if (carbs_g.value) parts.push("Carbs: " + carbs_g.value + "g");
-      if (fat_g.value) parts.push("Fat: " + fat_g.value + "g");
-      if (sodium_mg.value) parts.push("Sodium: " + sodium_mg.value + "mg");
-
-      const header = parts.join(" | ");
-      const raw = (ocrText.value || "").trim();
-      food_description.value = header + (raw ? ("\\n\\nOCR:\\n" + raw) : "");
+    btnLogOcr.addEventListener("click", () => {
+      const text = (ocrText.value || "").trim();
+      if (!text) return;
+      document.getElementById("food_description").value = text;
+      document.getElementById("logFoodForm").submit();
     });
   </script>
 </body>
@@ -869,30 +1187,26 @@ def scan_peptides():
   <title>Scan Peptides</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
-    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:860px; margin:0 auto;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
     h1{font-size:20px;margin:0 0 6px;}
     .muted{color:#666;font-size:13px;line-height:1.4}
     input[type=file]{width:100%;}
-    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:800; cursor:pointer;}
-    .btn.secondary{background:#fff;color:#111827;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
     .btn:disabled{opacity:.5;cursor:not-allowed;}
     .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
-    textarea{width:100%; min-height:110px; padding:10px; border-radius:12px; border:1px solid #e6e6ef; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;}
+    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
     .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
     .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
     .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
-    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:800;}
-    .canvasWrap{position:relative; width:100%; border-radius:12px; overflow:hidden; border:1px solid #e6e6ef; background:#fff;}
-    canvas{width:100%; height:auto; display:block; touch-action:none;}
-    .pill{display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; font-size:12px; color:#111827;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
   </style>
 </head>
 <body>
   <div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div>
-        <h1>📦 Scan Peptides (High Accuracy)</h1>
-        <div class="muted">Take a photo of the label (handwritten or printed). Drag to crop the label area for better OCR.</div>
+        <h1>📦 Scan Peptides</h1>
+        <div class="muted">Take a photo of the box/kit label (handwritten or printed). We’ll extract text and suggest peptide matches.</div>
       </div>
       <div class="toplinks">
         <a class="linkbtn" href="/add-vial">➕ Add Vial</a>
@@ -900,21 +1214,14 @@ def scan_peptides():
       </div>
     </div>
 
-    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light. Crop tightly around the label.</div></div>
+    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light.</div></div>
 
     <div style="margin-top:10px;">
       <input id="pepPhoto" type="file" accept="image/*" capture="environment" />
     </div>
 
-    <div class="muted" style="margin:8px 0 8px;"><b>Crop the label</b> (drag to select)</div>
-    <div class="canvasWrap">
-      <canvas id="imgCanvas"></canvas>
-    </div>
-
     <div class="row">
       <button class="btn" id="btnOcrPep" type="button" disabled>🔎 OCR Label</button>
-      <button class="btn secondary" id="btnReset" type="button" disabled>↩️ Reset Crop</button>
-      <span class="pill" id="statusPill">Waiting for photo…</span>
     </div>
 
     <div style="margin-top:10px;">
@@ -933,23 +1240,17 @@ def scan_peptides():
     const peptideNames = {{ peptide_names | tojson }};
     const pepPhoto = document.getElementById("pepPhoto");
     const btn = document.getElementById("btnOcrPep");
-    const btnReset = document.getElementById("btnReset");
     const pepText = document.getElementById("pepText");
     const matchBox = document.getElementById("matchBox");
     const matchChips = document.getElementById("matchChips");
-    const statusPill = document.getElementById("statusPill");
 
-    const imgCanvas = document.getElementById("imgCanvas");
-    const ctx = imgCanvas.getContext("2d");
-
-    let img = new Image();
-    let imgLoaded = false;
-
-    let crop = null;
-    let dragging = false;
-    let dragStart = null;
-
-    function setStatus(text){ statusPill.textContent = text; }
+    pepPhoto.addEventListener("change", () => {
+      const file = pepPhoto.files && pepPhoto.files[0];
+      btn.disabled = !file;
+      pepText.value = "";
+      matchBox.style.display = "none";
+      matchChips.innerHTML = "";
+    });
 
     function normalize(s){
       return (s||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").replace(/\s+/g," ").trim();
@@ -971,186 +1272,47 @@ def scan_peptides():
       const scored = peptideNames.map(n => ({name:n, score: scoreMatch(text,n)}))
                                 .filter(x => x.score > 0)
                                 .sort((a,b) => b.score - a.score)
-                                .slice(0, 8);
-
-      matchChips.innerHTML = "";
-      if (!scored.length){
-        matchBox.style.display = "none";
-        return;
-      }
-      for (const s of scored){
-        const chip = document.createElement("div");
-        chip.className = "chip";
-        chip.textContent = s.name;
-        chip.onclick = () => {
-          alert("Suggestion: " + s.name + "\\n\\nNext: select this peptide on Add Vial.");
-          window.location.href = "/add-vial";
-        };
-        matchChips.appendChild(chip);
-      }
-      matchBox.style.display = "block";
+                                .slice(0,8);
+      return scored;
     }
 
-    function fitCanvasToImage(){
-      const maxW = 1000;
-      const scale = Math.min(1, maxW / img.naturalWidth);
-      imgCanvas.width = Math.round(img.naturalWidth * scale);
-      imgCanvas.height = Math.round(img.naturalHeight * scale);
-      redraw();
-    }
-
-    function redraw(){
-      ctx.clearRect(0,0,imgCanvas.width,imgCanvas.height);
-      if (!imgLoaded) return;
-      ctx.drawImage(img, 0, 0, imgCanvas.width, imgCanvas.height);
-
-      if (crop && crop.w>2 && crop.h>2){
-        ctx.save();
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(0,0,imgCanvas.width,imgCanvas.height);
-        ctx.clearRect(crop.x, crop.y, crop.w, crop.h);
-        ctx.restore();
-
-        ctx.save();
-        ctx.strokeStyle = "rgba(17,24,39,0.95)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(crop.x+1, crop.y+1, crop.w-2, crop.h-2);
-        ctx.restore();
-      }
-    }
-
-    function canvasPoint(e){
-      const rect = imgCanvas.getBoundingClientRect();
-      const cx = (e.clientX - rect.left) * (imgCanvas.width / rect.width);
-      const cy = (e.clientY - rect.top) * (imgCanvas.height / rect.height);
-      return {x: Math.max(0, Math.min(imgCanvas.width, cx)), y: Math.max(0, Math.min(imgCanvas.height, cy))};
-    }
-
-    function startDrag(e){
-      if (!imgLoaded) return;
-      dragging = true;
-      const p = canvasPoint(e);
-      dragStart = p;
-      crop = {x:p.x, y:p.y, w:0, h:0};
-      redraw();
-    }
-    function moveDrag(e){
-      if (!dragging || !dragStart) return;
-      const p = canvasPoint(e);
-      const x = Math.min(dragStart.x, p.x);
-      const y = Math.min(dragStart.y, p.y);
-      const w = Math.abs(dragStart.x - p.x);
-      const h = Math.abs(dragStart.y - p.y);
-      crop = {x, y, w, h};
-      redraw();
-    }
-    function endDrag(){
-      dragging = false;
-      dragStart = null;
-      redraw();
-    }
-
-    imgCanvas.addEventListener("pointerdown", (e)=>{ imgCanvas.setPointerCapture(e.pointerId); startDrag(e); });
-    imgCanvas.addEventListener("pointermove", (e)=>{ moveDrag(e); });
-    imgCanvas.addEventListener("pointerup", ()=>{ endDrag(); });
-    imgCanvas.addEventListener("pointercancel", ()=>{ endDrag(); });
-
-    btnReset.addEventListener("click", ()=>{
-      crop = null;
-      redraw();
-      setStatus("Crop cleared.");
-    });
-
-    pepPhoto.addEventListener("change", ()=>{
+    btn.addEventListener("click", async () => {
       const file = pepPhoto.files && pepPhoto.files[0];
-      btn.disabled = !file;
-      btnReset.disabled = !file;
-      pepText.value = "";
-      matchBox.style.display = "none";
-      matchChips.innerHTML = "";
-      crop = null;
-
-      if (!file){
-        imgLoaded = false;
-        redraw();
-        setStatus("Waiting for photo…");
-        return;
-      }
-      const url = URL.createObjectURL(file);
-      img = new Image();
-      img.onload = ()=>{
-        imgLoaded = true;
-        fitCanvasToImage();
-        setStatus("Drag to crop the label, then OCR.");
-      };
-      img.src = url;
-    });
-
-    function preprocessToCanvas(srcCanvas, region){
-      const sx = region ? Math.max(0, region.x) : 0;
-      const sy = region ? Math.max(0, region.y) : 0;
-      const sw = region ? Math.max(1, region.w) : srcCanvas.width;
-      const sh = region ? Math.max(1, region.h) : srcCanvas.height;
-
-      const cropCanvas = document.createElement("canvas");
-      cropCanvas.width = sw;
-      cropCanvas.height = sh;
-      const cctx = cropCanvas.getContext("2d");
-      cctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
-
-      const targetW = Math.min(2000, Math.max(900, sw * 2));
-      const rScale = targetW / sw;
-      const targetH = Math.round(sh * rScale);
-
-      const out = document.createElement("canvas");
-      out.width = Math.round(targetW);
-      out.height = targetH;
-      const octx = out.getContext("2d");
-      octx.imageSmoothingEnabled = true;
-      octx.imageSmoothingQuality = "high";
-      octx.drawImage(cropCanvas, 0, 0, out.width, out.height);
-
-      const imgData = octx.getImageData(0,0,out.width,out.height);
-      const d = imgData.data;
-      const contrast = 1.35;
-      const thresh = 155;
-
-      for (let i=0; i<d.length; i+=4){
-        const r=d[i], g=d[i+1], b=d[i+2];
-        let v = 0.2126*r + 0.7152*g + 0.0722*b;
-        v = (v - 128) * contrast + 128;
-        v = Math.max(0, Math.min(255, v));
-        const bw = v > thresh ? 255 : 0;
-        d[i]=d[i+1]=d[i+2]=bw;
-      }
-      octx.putImageData(imgData, 0, 0);
-      return out;
-    }
-
-    btn.addEventListener("click", async ()=>{
-      const file = pepPhoto.files && pepPhoto.files[0];
-      if (!file || !imgLoaded) return;
+      if (!file) return;
 
       btn.disabled = true;
-      btnReset.disabled = true;
-      setStatus("OCR running…");
-
+      btn.textContent = "Running OCR...";
       try{
-        const useCrop = (crop && crop.w>40 && crop.h>40) ? crop : null;
-        const processed = preprocessToCanvas(imgCanvas, useCrop);
-
-        const result = await Tesseract.recognize(processed, "eng", { logger: m => {} });
-        const text = (result && result.data && result.data.text) ? result.data.text.trim() : "";
+        const { data } = await Tesseract.recognize(file, "eng");
+        const text = (data && data.text) ? data.text.trim() : "";
         pepText.value = text;
-        buildSuggestions(text);
-        setStatus(text ? "OCR complete. Tap a suggestion." : "No text found — retake and crop tighter.");
-      }catch(e){
-        console.error(e);
-        setStatus("OCR failed.");
-        alert("OCR failed. Try retaking the photo with brighter light and tighter crop.");
+
+        const suggestions = buildSuggestions(text);
+        matchChips.innerHTML = "";
+
+        if (suggestions.length){
+          suggestions.forEach(s => {
+            const chip = document.createElement("div");
+            chip.className = "chip";
+            chip.textContent = s.name;
+            chip.addEventListener("click", () => {
+              const u = new URL(window.location.origin + "/add-vial");
+              u.searchParams.set("suggest_peptide", s.name);
+              window.location.href = u.toString();
+            });
+            matchChips.appendChild(chip);
+          });
+          matchBox.style.display = "block";
+        } else {
+          matchBox.style.display = "block";
+          matchChips.innerHTML = "<div class='muted'>No confident match found — try a closer photo, or just go to Add Vial and select manually.</div>";
+        }
+
+      }catch(err){
+        alert("OCR failed. Try again with brighter lighting and closer focus.");
       }finally{
         btn.disabled = false;
-        btnReset.disabled = false;
+        btn.textContent = "🔎 OCR Label";
       }
     });
   </script>
@@ -1366,6 +1528,25 @@ def reset_password(token):
 # -----------------------------------------------------------------------------
 # User Profile Routes
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Profile Skip (optional onboarding)
+# -----------------------------------------------------------------------------
+@app.route("/profile-skip", methods=["GET"])
+@login_required
+def profile_skip():
+    """Allow users to skip profile setup and continue to dashboard."""
+    session["profile_skipped"] = True
+    flash("Profile skipped — you can complete it later.", "info")
+    return redirect(url_for("dashboard"))
+
+# Alias endpoints (in case templates reference different names)
+@app.route("/profile/skip", methods=["GET"], endpoint="skip_profile")
+@login_required
+def _skip_profile_alias():
+    session["profile_skipped"] = True
+    flash("Profile skipped — you can complete it later.", "info")
+    return redirect(url_for("dashboard"))
+
 @app.route("/profile-setup", methods=["GET", "POST"])
 @login_required
 def profile_setup():
@@ -1447,10 +1628,7 @@ def onboarding_step_2():
     if not u:
         return redirect(url_for("login"))
 
-    # If profile isn't complete yet, force step 1 first
-    if not is_profile_complete(u.id):
-        return redirect(url_for("onboarding_step_1"))
-
+    # Profile is optional; do not force step 1.
     if request.method == "POST":
         db = get_session(db_url)
         try:
