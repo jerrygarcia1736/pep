@@ -1,47 +1,162 @@
 {% extends "base.html" %}
-{% block title %}Profile (Optional){% endblock %}
+{% block title %}Profile Setup (Optional) - PeptideTracker.ai{% endblock %}
 
 {% block content %}
 <div class="container" style="max-width:720px">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2>Profile (optional)</h2>
-    <a class="btn btn-outline-secondary" href="{{ url_for('profile_setup_skip') }}">
-      Skip for now
-    </a>
+  <div class="mb-4">
+    <h2 class="mb-2">Complete Your Profile <span class="badge bg-secondary">Optional</span></h2>
+    <p class="text-muted">Help us personalize your experience. You can skip this and complete it later.</p>
   </div>
 
-  <form method="post" novalidate>
-    <div class="card mb-3">
+  <form method="POST" novalidate>
+    <!-- Goals Card -->
+    <div class="card mb-4 shadow-sm">
+      <div class="card-header bg-light">
+        <h5 class="mb-0"><i class="bi bi-target"></i> Your Goals</h5>
+      </div>
       <div class="card-body">
-        <h5>Your goals</h5>
+        <p class="small text-muted mb-3">Select all that apply (helps personalize Pep AI responses)</p>
+        
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="goals" value="fat_loss" id="goal_fat_loss">
+              <label class="form-check-label" for="goal_fat_loss">
+                <i class="bi bi-fire text-danger me-1"></i> <strong>Fat Loss</strong>
+              </label>
+            </div>
+          </div>
 
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="goals" value="fat_loss">
-          <label class="form-check-label">Fat loss</label>
-        </div>
+          <div class="col-md-6">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="goals" value="muscle" id="goal_muscle">
+              <label class="form-check-label" for="goal_muscle">
+                <i class="bi bi-heart-pulse text-primary me-1"></i> <strong>Muscle Gain</strong>
+              </label>
+            </div>
+          </div>
 
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="goals" value="muscle">
-          <label class="form-check-label">Muscle gain</label>
-        </div>
+          <div class="col-md-6">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="goals" value="recovery" id="goal_recovery">
+              <label class="form-check-label" for="goal_recovery">
+                <i class="bi bi-bandaid text-success me-1"></i> <strong>Injury Recovery</strong>
+              </label>
+            </div>
+          </div>
 
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="goals" value="recovery">
-          <label class="form-check-label">Injury recovery</label>
-        </div>
+          <div class="col-md-6">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="goals" value="longevity" id="goal_longevity">
+              <label class="form-check-label" for="goal_longevity">
+                <i class="bi bi-hourglass-split text-info me-1"></i> <strong>Longevity</strong>
+              </label>
+            </div>
+          </div>
 
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="goals" value="longevity">
-          <label class="form-check-label">Longevity</label>
+          <div class="col-md-6">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="goals" value="performance" id="goal_performance">
+              <label class="form-check-label" for="goal_performance">
+                <i class="bi bi-lightning text-warning me-1"></i> <strong>Performance</strong>
+              </label>
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="goals" value="wellness" id="goal_wellness">
+              <label class="form-check-label" for="goal_wellness">
+                <i class="bi bi-heart text-danger me-1"></i> <strong>General Wellness</strong>
+              </label>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="d-flex gap-2">
-      <button class="btn btn-primary" type="submit">Save profile</button>
-      <button class="btn btn-outline-secondary" name="action" value="skip" type="submit">
-        Skip for now
+    <!-- Optional Demographics Card -->
+    <div class="card mb-4 shadow-sm">
+      <div class="card-header bg-light">
+        <h5 class="mb-0"><i class="bi bi-person"></i> Demographics <span class="badge bg-secondary">Optional</span></h5>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-3">These help with dosing calculations (all optional)</p>
+        
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label for="age" class="form-label">Age</label>
+            <input type="number" class="form-control" id="age" name="age" min="18" max="120" placeholder="Years">
+          </div>
+
+          <div class="col-md-4">
+            <label for="weight_lbs" class="form-label">Weight</label>
+            <div class="input-group">
+              <input type="number" class="form-control" id="weight_lbs" name="weight_lbs" min="50" max="500" step="0.1" placeholder="lbs">
+              <span class="input-group-text">lbs</span>
+            </div>
+          </div>
+
+          <div class="col-md-4">
+            <label for="height_inches" class="form-label">Height</label>
+            <div class="input-group">
+              <input type="number" class="form-control" id="height_inches" name="height_inches" min="36" max="96" placeholder="inches">
+              <span class="input-group-text">in</span>
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label for="gender" class="form-label">Gender</label>
+            <select class="form-select" id="gender" name="gender">
+              <option value="">Prefer not to say</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          <div class="col-md-6">
+            <label for="experience_level" class="form-label">Experience Level</label>
+            <select class="form-select" id="experience_level" name="experience_level">
+              <option value="">Select...</option>
+              <option value="beginner">Beginner</option>
+              <option value="intermediate">Intermediate</option>
+              <option value="advanced">Advanced</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Medical Notes Card -->
+    <div class="card mb-4 shadow-sm">
+      <div class="card-header bg-light">
+        <h5 class="mb-0"><i class="bi bi-clipboard2-pulse"></i> Medical Notes <span class="badge bg-secondary">Optional</span></h5>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-3">Any relevant medical conditions, allergies, or notes (kept private)</p>
+        
+        <textarea class="form-control" id="medical_notes" name="medical_notes" rows="3" 
+                  placeholder="e.g., Allergies, conditions, medications..."></textarea>
+        
+        <div class="form-text">
+          <i class="bi bi-shield-lock text-primary"></i> Your medical information is encrypted and never shared
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="d-flex gap-3 justify-content-between">
+      <button type="submit" name="action" value="skip" class="btn btn-outline-secondary btn-lg">
+        <i class="bi bi-skip-forward"></i> Skip for Now
       </button>
+      <button type="submit" name="action" value="save" class="btn btn-primary btn-lg flex-grow-1">
+        <i class="bi bi-check-circle"></i> Save Profile
+      </button>
+    </div>
+
+    <div class="text-center mt-3">
+      <small class="text-muted">You can update your profile anytime from settings</small>
     </div>
   </form>
 </div>
