@@ -40,6 +40,13 @@ from nutrition_api import register_nutrition_routes
 # Flask app
 # -----------------------------------------------------------------------------
 app = Flask(__name__)
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+
+# Session configuration for mobile support
+app.config["SESSION_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # Better mobile compatibility
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)  # Keep users logged in
 # -----------------------------------------------------------------------------
 # Food scanning configuration (used by /scan-food and /api/* endpoints)
 # -----------------------------------------------------------------------------
@@ -172,7 +179,6 @@ def _openai_identify_food_from_image(image_b64: str) -> dict:
         return json.loads(content)
     except Exception as e:
         return {"error": str(e)}
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
 # Jinja filter for parsing JSON in templates
 @app.template_filter('from_json')
@@ -371,17 +377,27 @@ def has_accepted_disclaimer(user_id: int) -> bool:
         db.close()
 
 def require_onboarding(view_func):
+    """Optional onboarding decorator - shows warnings but doesn't block users"""
     @wraps(view_func)
     def wrapper(*args, **kwargs):
         u = get_current_user()
         if not u:
             return redirect(url_for("login"))
-        # Step 1: profile
-        if not is_profile_complete(u.id) and request.endpoint not in {"profile_setup", "logout", "onboarding_step_1", "onboarding_step_2", "medical_disclaimer"}:
-            return redirect(url_for("onboarding_step_1"))
-        # Step 2: disclaimer acknowledgement
-        if is_profile_complete(u.id) and not has_accepted_disclaimer(u.id) and request.endpoint not in {"onboarding_step_2", "logout", "medical_disclaimer"}:
-            return redirect(url_for("onboarding_step_2"))
+        
+        # Make onboarding OPTIONAL - don't block users
+        # This fixes mobile login issues
+        try:
+            # Step 1: profile (optional - just show message)
+            if not is_profile_complete(u.id) and request.endpoint == "dashboard":
+                flash("💡 Complete your profile to unlock personalized AI features!", "info")
+            
+            # Step 2: disclaimer (optional - just show message)  
+            if is_profile_complete(u.id) and not has_accepted_disclaimer(u.id) and request.endpoint == "dashboard":
+                flash("⚠️ Please acknowledge our medical disclaimer.", "warning")
+        except Exception as e:
+            # Never block users due to onboarding errors
+            print(f"Onboarding check error (non-blocking): {e}")
+        
         return view_func(*args, **kwargs)
     return wrapper
 
@@ -985,6 +1001,7 @@ def register():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    """Login with improved mobile support and error handling"""
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
@@ -1000,9 +1017,19 @@ def login():
                 flash("Invalid credentials.", "error")
                 return render_if_exists("login.html", fallback_endpoint="index")
 
+            # Set session
             session["user_id"] = user.id
-            flash("Logged in!", "success")
+            session.permanent = True  # Make session persist across browser restarts
+            
+            flash("Logged in successfully!", "success")
+            
+            # Always redirect to dashboard - onboarding is now optional
             return redirect(url_for("dashboard"))
+        except Exception as e:
+            # Log error but don't expose to user
+            print(f"Login error: {e}")
+            flash("Login error. Please try again.", "error")
+            return render_if_exists("login.html", fallback_endpoint="index")
         finally:
             db.close()
 
