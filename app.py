@@ -34,38 +34,7 @@ from confidence import compute_injection_confidence
 # Flask app
 # -----------------------------------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
-
-
-# --- Diagnostic: log unhandled exceptions with request context (helps debug mobile-only 500s) ---
-import traceback
-from flask import has_request_context
-from flask.signals import got_request_exception
-
-def _log_exception(sender, exception, **extra):
-    try:
-        if not has_request_context():
-            app.logger.exception("Unhandled exception (no request context): %s", exception)
-            return
-        ua = request.headers.get("User-Agent", "")
-        app.logger.error(
-            "Unhandled exception on %s %s endpoint=%s ua=%s session_keys=%s\n%s",
-            request.method,
-            request.path,
-            request.endpoint,
-            ua,
-            list(session.keys()),
-            traceback.format_exc(),
-        )
-    except Exception:
-        # Never allow logging to crash the app
-        app.logger.exception("Failed to log exception")
-
-got_request_exception.connect(_log_exception, app)
-
-
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
-app.config["SESSION_COOKIE_SAMESITE"] = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
-app.config["SESSION_COOKIE_SECURE"] = True
 
 # ----------------------------
 # Helpers
@@ -286,17 +255,16 @@ def has_accepted_disclaimer(user_id: int) -> bool:
         db.close()
 
 def require_onboarding(view_func):
+    """Lightweight gate: requires login, but does NOT force onboarding redirects.
+
+    Profile + disclaimer are optional and can be completed later.
+    Individual features can check profile/disclaimer as needed.
+    """
     @wraps(view_func)
     def wrapper(*args, **kwargs):
         u = get_current_user()
         if not u:
             return redirect(url_for("login"))
-        # Step 1: profile
-        if not is_profile_complete(u.id) and request.endpoint not in {"profile_setup", "logout", "onboarding_step_1", "onboarding_step_2", "medical_disclaimer"}:
-            return redirect(url_for("onboarding_step_1"))
-        # Step 2: disclaimer acknowledgement
-        if is_profile_complete(u.id) and not has_accepted_disclaimer(u.id) and request.endpoint not in {"onboarding_step_2", "logout", "medical_disclaimer"}:
-            return redirect(url_for("onboarding_step_2"))
         return view_func(*args, **kwargs)
     return wrapper
 
@@ -1305,6 +1273,25 @@ def reset_password(token):
 # -----------------------------------------------------------------------------
 # User Profile Routes
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Profile Skip (optional onboarding)
+# -----------------------------------------------------------------------------
+@app.route("/profile-skip", methods=["GET"])
+@login_required
+def profile_skip():
+    """Allow users to skip profile setup and continue to dashboard."""
+    session["profile_skipped"] = True
+    flash("Profile skipped — you can complete it later.", "info")
+    return redirect(url_for("dashboard"))
+
+# Alias endpoints (in case templates reference different names)
+@app.route("/profile/skip", methods=["GET"], endpoint="skip_profile")
+@login_required
+def _skip_profile_alias():
+    session["profile_skipped"] = True
+    flash("Profile skipped — you can complete it later.", "info")
+    return redirect(url_for("dashboard"))
+
 @app.route("/profile-setup", methods=["GET", "POST"])
 @login_required
 def profile_setup():
@@ -1386,10 +1373,7 @@ def onboarding_step_2():
     if not u:
         return redirect(url_for("login"))
 
-    # If profile isn't complete yet, force step 1 first
-    if not is_profile_complete(u.id):
-        return redirect(url_for("onboarding_step_1"))
-
+    # Profile is optional; do not force step 1.
     if request.method == "POST":
         db = get_session(db_url)
         try:
