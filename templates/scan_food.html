@@ -1,280 +1,493 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>📸 Scan Food</title>
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:18px;max-width:720px;margin:0 auto;padding:18px;background:#f8f9fa}
-    h1{font-size:22px;margin:0 0 8px;display:flex;align-items:center;gap:8px}
-    .sub{color:#555;font-size:14px;margin:0 0 16px;line-height:1.5}
-    .tabs{display:flex;gap:8px;margin:14px 0}
-    .tab{flex:1;padding:10px 14px;border-radius:12px;border:2px solid #e0e0e0;background:#fff;cursor:pointer;text-align:center;font-weight:600;transition:all .2s}
-    .tab:hover{border-color:#bbb}
-    .tab.active{background:#4f46e5;color:#fff;border-color:#4f46e5}
-    .card{border:1px solid #e0e0e0;border-radius:16px;padding:16px;background:#fff;margin-top:14px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
-    .hint{color:#666;font-size:13px;margin:10px 0 0;line-height:1.4;padding:8px 12px;background:#f0f0f0;border-radius:8px}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
-    button{padding:12px 16px;border:none;background:#111;color:#fff;border-radius:12px;cursor:pointer;font-weight:600;font-size:14px;transition:all .2s}
-    button:hover{background:#333}
-    button.secondary{background:#fff;color:#111;border:2px solid #111}
-    button.secondary:hover{background:#f5f5f5}
-    button:disabled{opacity:.5;cursor:not-allowed}
-    button.camera-btn{background:#4f46e5;font-size:16px}
-    button.camera-btn:hover{background:#4338ca}
-    textarea{width:100%;min-height:110px;margin-top:12px;font-family:ui-monospace,Menlo,monospace;border:2px solid #e0e0e0;border-radius:12px;padding:12px;font-size:14px;resize:vertical}
-    .pred{display:flex;justify-content:space-between;gap:12px;padding:12px 14px;border:2px solid #e0e0e0;border-radius:12px;margin:10px 0;cursor:pointer;transition:all .2s;background:#fff}
-    .pred:hover{border-color:#4f46e5;transform:translateY(-2px);box-shadow:0 4px 12px rgba(79,70,229,.15)}
-    .pred b{font-size:16px}
-    .small{font-size:12px;color:#666;margin-top:4px}
-    .confidence{font-size:18px;font-weight:700;color:#4f46e5}
-    .status{margin-top:12px;padding:10px 14px;border-radius:8px;font-size:14px;font-weight:600}
-    .status.loading{background:#fef3c7;color:#92400e}
-    .status.success{background:#d1fae5;color:#065f46}
-    .status.error{background:#fee2e2;color:#991b1b}
-    img.preview{max-width:100%;border-radius:12px;border:2px solid #e0e0e0;margin-top:12px}
-    .note{font-size:13px;color:#666;line-height:1.5;padding:12px;background:#f0f0f0;border-radius:8px;margin-bottom:12px}
-    .note ul{margin:8px 0;padding-left:20px}
-    .note li{margin:4px 0}
-    input[type=file]{display:none}
-    .file-input-label{display:inline-flex;align-items:center;gap:8px;padding:12px 16px;background:#fff;border:2px solid #111;border-radius:12px;cursor:pointer;font-weight:600;transition:all .2s}
-    .file-input-label:hover{background:#f5f5f5}
-    .spinner{border:3px solid #f3f3f3;border-top:3px solid #4f46e5;border-radius:50%;width:24px;height:24px;animation:spin .8s linear infinite;display:inline-block;margin-right:8px}
-    @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
-  </style>
-</head>
-<body>
-<h1>📸 Scan Food</h1>
-<div class="note">
-  Snap a photo of the food for best-guess labels, or use OCR to extract text from receipts/labels.
-  <ul>
-    <li><b>Photo (AI Guess)</b>: Take a picture of food (e.g., apple, chicken breast)</li>
-    <li><b>Text (OCR)</b>: Extract text from nutrition labels or receipts</li>
-  </ul>
-  Always confirm suggestions before logging!
-</div>
+{% extends "base.html" %}
 
-<div class="tabs">
-  <button id="tab-photo" class="tab active" type="button">📷 Photo (AI Guess)</button>
-  <button id="tab-ocr" class="tab" type="button">📝 Text (OCR)</button>
-</div>
+{% block title %}Scan Food - PeptideTracker.ai{% endblock %}
 
-<!-- PHOTO AI PANEL -->
-<div id="panel-photo" class="card">
-  <input id="foodPhoto" type="file" accept="image/*" capture="environment"/>
-  <div class="row">
-    <button id="btnUseCamera" class="camera-btn" type="button">📸 Use Camera</button>
-    <label for="foodPhoto" class="file-input-label">📁 Choose File</label>
-    <button id="btnClearPhoto" class="secondary" type="button">🗑️ Clear</button>
-  </div>
-  <div class="hint">💡 Tip: Center the food, fill the frame, use good lighting</div>
-  <div id="photoStatus" class="status" style="display:none"></div>
-  <div id="photoPreviewWrap" style="display:none;">
-    <img id="photoPreview" class="preview" alt="preview"/>
-  </div>
-  <div id="predictions"></div>
-</div>
+{% block content %}
+<div class="container" style="max-width: 960px;">
+    <div class="d-flex align-items-center justify-content-between mb-4">
+        <div>
+            <h1 class="mb-1">
+                <i class="bi bi-camera"></i> Scan Food
+            </h1>
+            <p class="text-muted mb-0">Take a photo to instantly get nutrition data</p>
+        </div>
+        <a href="{{ url_for('nutrition') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back
+        </a>
+    </div>
 
-<!-- OCR TEXT PANEL -->
-<div id="panel-ocr" class="card" style="display:none;">
-  <input id="imageInput" type="file" accept="image/*" capture="environment"/>
-  <div class="row">
-    <button id="btnUseCameraOcr" class="camera-btn" type="button">📸 Use Camera</button>
-    <label for="imageInput" class="file-input-label">📁 Choose File</label>
-    <button id="btnClearOcr" class="secondary" type="button">🗑️ Clear</button>
-  </div>
-  <div class="hint">💡 Best for nutrition labels, receipts, or handwritten food notes</div>
-  <div id="ocrStatus" class="status" style="display:none"></div>
-  <textarea id="ocrText" placeholder="Extracted text will appear here..."></textarea>
-  <div class="row">
-    <button id="btnUseOcr" type="button">✅ Use Text in Food Log</button>
-  </div>
+    <!-- Camera Section -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-body p-4">
+            <!-- Tip -->
+            <div class="alert alert-info d-flex align-items-center">
+                <i class="bi bi-lightbulb me-2"></i>
+                <div class="small">
+                    <strong>Tip:</strong> Center the food, fill the frame, use good lighting for best results
+                </div>
+            </div>
+
+            <!-- Camera Preview -->
+            <div id="cameraPreview" class="position-relative bg-dark rounded-3 overflow-hidden mb-3" style="height: 400px;">
+                <div id="cameraPlaceholder" class="d-flex flex-column align-items-center justify-content-center h-100 text-white">
+                    <i class="bi bi-camera" style="font-size: 4rem;"></i>
+                    <p class="mt-3">Camera preview will appear here</p>
+                </div>
+                <video id="cameraVideo" class="w-100 h-100" style="object-fit: cover; display: none;" autoplay playsinline></video>
+                <canvas id="captureCanvas" style="display: none;"></canvas>
+                <img id="capturedImage" class="w-100 h-100" style="object-fit: contain; display: none;" />
+            </div>
+
+            <!-- Camera Controls -->
+            <div class="d-flex gap-2 flex-wrap">
+                <button id="btnStartCamera" class="btn btn-primary btn-lg flex-grow-1" type="button">
+                    <i class="bi bi-camera-video"></i> Start Camera
+                </button>
+                <button id="btnCapture" class="btn btn-success btn-lg flex-grow-1" type="button" style="display: none;">
+                    <i class="bi bi-camera"></i> Take Photo
+                </button>
+                <button id="btnRetake" class="btn btn-warning flex-grow-1" type="button" style="display: none;">
+                    <i class="bi bi-arrow-clockwise"></i> Retake
+                </button>
+                <label for="fileInput" class="btn btn-outline-primary flex-grow-1 mb-0">
+                    <i class="bi bi-upload"></i> Upload Photo
+                </label>
+                <input type="file" id="fileInput" accept="image/*" style="display: none;" />
+            </div>
+
+            <!-- Loading Indicator -->
+            <div id="loadingIndicator" class="text-center py-4" style="display: none;">
+                <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="text-muted mt-3 mb-0">
+                    <strong>Analyzing food...</strong><br>
+                    <small>This may take a few seconds</small>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detection Results -->
+    <div id="detectionResults" class="card shadow-sm" style="display: none;">
+        <div class="card-header bg-success text-white">
+            <h5 class="mb-0">
+                <i class="bi bi-check-circle"></i> Found Food! Tap to see nutrition:
+            </h5>
+        </div>
+        <div class="card-body">
+            <!-- Detected Food Info -->
+            <div id="detectedFoodInfo" class="alert alert-light mb-3">
+                <div class="d-flex align-items-start gap-2">
+                    <i class="bi bi-info-circle text-primary" style="font-size: 1.5rem;"></i>
+                    <div class="flex-grow-1">
+                        <strong>Detected:</strong> <span id="detectedFoodName">-</span>
+                        <span id="detectedConfidence" class="badge bg-primary ms-2">-</span>
+                        <div id="detectedNotes" class="small text-muted mt-1"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Food Options -->
+            <div id="foodOptions" class="row g-3"></div>
+
+            <!-- Selected Food Details -->
+            <div id="selectedFoodDetails" style="display: none;" class="mt-4">
+                <hr>
+                <h5 class="mb-3">Nutrition Information</h5>
+                
+                <!-- Macros Grid -->
+                <div class="row g-3 mb-3">
+                    <div class="col-6 col-md-3">
+                        <div class="card bg-primary text-white">
+                            <div class="card-body text-center p-3">
+                                <div class="display-6 fw-bold" id="selectedCalories">-</div>
+                                <small>Calories</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="card bg-success text-white">
+                            <div class="card-body text-center p-3">
+                                <div class="display-6 fw-bold" id="selectedProtein">-</div>
+                                <small>Protein (g)</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="card bg-warning text-white">
+                            <div class="card-body text-center p-3">
+                                <div class="display-6 fw-bold" id="selectedCarbs">-</div>
+                                <small>Carbs (g)</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="card bg-danger text-white">
+                            <div class="card-body text-center p-3">
+                                <div class="display-6 fw-bold" id="selectedFat">-</div>
+                                <small>Fat (g)</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Serving Info -->
+                <div class="alert alert-light">
+                    <i class="bi bi-info-circle"></i> 
+                    <strong>Serving:</strong> <span id="selectedServing">-</span>
+                    <span class="ms-2 text-muted">|</span>
+                    <strong class="ms-2">Source:</strong> <span id="selectedSource">-</span>
+                </div>
+
+                <!-- Quantity Adjuster -->
+                <div class="card bg-light mb-3">
+                    <div class="card-body">
+                        <label class="form-label fw-semibold">Quantity</label>
+                        <div class="input-group" style="max-width: 300px;">
+                            <button class="btn btn-outline-primary" type="button" id="btnDecreaseQty">
+                                <i class="bi bi-dash-lg"></i>
+                            </button>
+                            <input type="number" class="form-control text-center" id="quantityInput" value="1" min="0.1" step="0.5">
+                            <button class="btn btn-outline-primary" type="button" id="btnIncreaseQty">
+                                <i class="bi bi-plus-lg"></i>
+                            </button>
+                        </div>
+                        <small class="text-muted">Adjust the quantity and macros will update automatically</small>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="d-grid gap-2">
+                    <button type="button" id="btnLogFood" class="btn btn-primary btn-lg">
+                        <i class="bi bi-check-circle"></i> Log This Food
+                    </button>
+                    <button type="button" id="btnScanAnother" class="btn btn-outline-secondary">
+                        <i class="bi bi-camera"></i> Scan Another Food
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tips Section -->
+    <div class="card mt-4 bg-light">
+        <div class="card-body">
+            <h6 class="mb-3"><i class="bi bi-lightbulb"></i> Tips for Best Results:</h6>
+            <ul class="mb-0 small">
+                <li>Take photos in good lighting conditions</li>
+                <li>Fill the frame with your food</li>
+                <li>Avoid shadows and reflections</li>
+                <li>For multiple items, scan them separately for accuracy</li>
+                <li>You can always manually adjust the quantity after scanning</li>
+            </ul>
+        </div>
+    </div>
 </div>
 
 <script>
-// Tab switching
-const tabPhoto = document.getElementById('tab-photo');
-const tabOcr = document.getElementById('tab-ocr');
-const panelPhoto = document.getElementById('panel-photo');
-const panelOcr = document.getElementById('panel-ocr');
+// Camera and food scanning functionality
+const cameraVideo = document.getElementById('cameraVideo');
+const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+const captureCanvas = document.getElementById('captureCanvas');
+const capturedImage = document.getElementById('capturedImage');
+const btnStartCamera = document.getElementById('btnStartCamera');
+const btnCapture = document.getElementById('btnCapture');
+const btnRetake = document.getElementById('btnRetake');
+const fileInput = document.getElementById('fileInput');
+const loadingIndicator = document.getElementById('loadingIndicator');
+const detectionResults = document.getElementById('detectionResults');
+const foodOptions = document.getElementById('foodOptions');
+const selectedFoodDetails = document.getElementById('selectedFoodDetails');
 
-function setTab(which){
-  const photo = (which === 'photo');
-  tabPhoto.classList.toggle('active', photo);
-  tabOcr.classList.toggle('active', !photo);
-  panelPhoto.style.display = photo ? 'block' : 'none';
-  panelOcr.style.display = photo ? 'none' : 'block';
-}
-tabPhoto.addEventListener('click', () => setTab('photo'));
-tabOcr.addEventListener('click', () => setTab('ocr'));
+let cameraStream = null;
+let selectedFood = null;
+let baseMacros = null;
 
-// === PHOTO AI PANEL ===
-const foodPhoto = document.getElementById('foodPhoto');
-const btnUseCamera = document.getElementById('btnUseCamera');
-const btnClearPhoto = document.getElementById('btnClearPhoto');
-const photoStatus = document.getElementById('photoStatus');
-const photoPreviewWrap = document.getElementById('photoPreviewWrap');
-const photoPreview = document.getElementById('photoPreview');
-const predictions = document.getElementById('predictions');
-
-// Use Camera button - triggers file input with camera
-btnUseCamera.addEventListener('click', () => {
-  foodPhoto.click();
+// Start camera
+btnStartCamera.addEventListener('click', async () => {
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } 
+        });
+        
+        cameraVideo.srcObject = cameraStream;
+        cameraPlaceholder.style.display = 'none';
+        cameraVideo.style.display = 'block';
+        btnStartCamera.style.display = 'none';
+        btnCapture.style.display = 'block';
+    } catch (error) {
+        console.error('Camera error:', error);
+        alert('Could not access camera. Please check permissions or use photo upload instead.');
+    }
 });
 
-// When photo selected, show preview and analyze automatically
-foodPhoto.addEventListener('change', async () => {
-  const file = foodPhoto.files && foodPhoto.files[0];
-  predictions.innerHTML = '';
-  photoStatus.style.display = 'none';
-  
-  if (!file) { 
-    photoPreviewWrap.style.display = 'none'; 
-    return; 
-  }
-  
-  const url = URL.createObjectURL(file);
-  photoPreview.src = url;
-  photoPreviewWrap.style.display = 'block';
-  
-  // Auto-analyze on mobile
-  await analyzePhoto(file);
-});
-
-btnClearPhoto.addEventListener('click', () => {
-  foodPhoto.value = '';
-  photoPreviewWrap.style.display = 'none';
-  predictions.innerHTML = '';
-  photoStatus.style.display = 'none';
-});
-
-async function analyzePhoto(file){
-  if (!file) return;
-  
-  btnUseCamera.disabled = true;
-  predictions.innerHTML = '';
-  photoStatus.className = 'status loading';
-  photoStatus.style.display = 'block';
-  photoStatus.innerHTML = '<span class="spinner"></span>Analyzing food...';
-  
-  try{
-    const form = new FormData();
-    form.append('image', file);
+// Capture photo
+btnCapture.addEventListener('click', () => {
+    captureCanvas.width = cameraVideo.videoWidth;
+    captureCanvas.height = cameraVideo.videoHeight;
+    captureCanvas.getContext('2d').drawImage(cameraVideo, 0, 0);
     
-    const res = await fetch('/api/classify-food', { 
-      method: 'POST', 
-      body: form 
-    });
+    // Show captured image
+    capturedImage.src = captureCanvas.toDataURL('image/jpeg', 0.9);
+    capturedImage.style.display = 'block';
+    cameraVideo.style.display = 'none';
+    btnCapture.style.display = 'none';
+    btnRetake.style.display = 'block';
     
-    const data = await res.json();
-    
-    if (!res.ok) throw new Error(data.error || 'Classification failed');
-    
-    const preds = data.predictions || [];
-    
-    if (preds.length === 0){
-      photoStatus.className = 'status error';
-      photoStatus.textContent = '❌ No food detected. Try a clearer photo with better lighting.';
-      return;
+    // Stop camera
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
     }
     
-    photoStatus.className = 'status success';
-    photoStatus.textContent = '✅ Found ' + preds.length + ' matches! Tap one to log it:';
+    // Process the image
+    processImage(captureCanvas.toDataURL('image/jpeg', 0.9));
+});
+
+// Retake photo
+btnRetake.addEventListener('click', () => {
+    capturedImage.style.display = 'none';
+    btnRetake.style.display = 'none';
+    btnStartCamera.style.display = 'block';
+    detectionResults.style.display = 'none';
+    selectedFoodDetails.style.display = 'none';
+});
+
+// File upload
+fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
     
-    preds.forEach(p => {
-      const div = document.createElement('div');
-      div.className = 'pred';
-      const pct = Math.round((p.confidence || 0) * 100);
-      div.innerHTML = `
-        <div>
-          <b>${p.label}</b>
-          <div class="small">${p.description || ''}</div>
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        capturedImage.src = event.target.result;
+        capturedImage.style.display = 'block';
+        cameraPlaceholder.style.display = 'none';
+        btnStartCamera.style.display = 'none';
+        btnRetake.style.display = 'block';
+        
+        processImage(event.target.result);
+    };
+    reader.readAsDataURL(file);
+});
+
+// Process image (send to API)
+async function processImage(imageDataUrl) {
+    loadingIndicator.style.display = 'block';
+    detectionResults.style.display = 'none';
+    
+    try {
+        // Convert data URL to blob
+        const blob = await fetch(imageDataUrl).then(r => r.blob());
+        
+        // Create form data
+        const formData = new FormData();
+        formData.append('image', blob, 'food.jpg');
+        
+        // Send to API
+        const response = await fetch('/api/scan-food-image', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to analyze food');
+        }
+        
+        displayResults(data);
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Error analyzing food: ' + error.message);
+    } finally {
+        loadingIndicator.style.display = 'none';
+    }
+}
+
+// Display detection results
+function displayResults(data) {
+    // Show detected food info
+    document.getElementById('detectedFoodName').textContent = data.detected_food;
+    document.getElementById('detectedConfidence').textContent = Math.round(data.confidence * 100) + '% confident';
+    
+    if (data.notes) {
+        document.getElementById('detectedNotes').textContent = data.notes;
+        document.getElementById('detectedNotes').style.display = 'block';
+    }
+    
+    // Display food options
+    foodOptions.innerHTML = '';
+    data.foods.forEach((food, index) => {
+        const foodCard = createFoodOptionCard(food, index);
+        foodOptions.appendChild(foodCard);
+    });
+    
+    detectionResults.style.display = 'block';
+    detectionResults.scrollIntoView({ behavior: 'smooth' });
+}
+
+// Create food option card
+function createFoodOptionCard(food, index) {
+    const col = document.createElement('div');
+    col.className = 'col-12 col-md-6';
+    
+    const card = document.createElement('div');
+    card.className = 'card h-100 food-option-card';
+    card.style.cursor = 'pointer';
+    card.innerHTML = `
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+                <h6 class="card-title mb-0">${food.description}</h6>
+                <span class="badge bg-primary">${food.source}</span>
+            </div>
+            <div class="row g-2 text-center small">
+                <div class="col-3">
+                    <strong>${Math.round(food.calories)}</strong><br>
+                    <small class="text-muted">cal</small>
+                </div>
+                <div class="col-3">
+                    <strong>${Math.round(food.protein)}g</strong><br>
+                    <small class="text-muted">protein</small>
+                </div>
+                <div class="col-3">
+                    <strong>${Math.round(food.carbs)}g</strong><br>
+                    <small class="text-muted">carbs</small>
+                </div>
+                <div class="col-3">
+                    <strong>${Math.round(food.fat)}g</strong><br>
+                    <small class="text-muted">fat</small>
+                </div>
+            </div>
+            <div class="mt-2 small text-muted">
+                <i class="bi bi-box"></i> Serving: ${food.serving_size}
+            </div>
         </div>
-        <div class="confidence">${pct}%</div>
-      `;
-      div.addEventListener('click', () => {
-        window.location.href = '/log-food?q=' + encodeURIComponent(p.label);
-      });
-      predictions.appendChild(div);
-    });
+    `;
     
-  }catch(e){
-    photoStatus.className = 'status error';
-    photoStatus.textContent = '❌ Error: ' + e.message;
-  }finally{
-    btnUseCamera.disabled = false;
-  }
+    card.addEventListener('click', () => selectFood(food));
+    
+    col.appendChild(card);
+    return col;
 }
 
-// === OCR PANEL ===
-const imageInput = document.getElementById('imageInput');
-const btnUseCameraOcr = document.getElementById('btnUseCameraOcr');
-const btnClearOcr = document.getElementById('btnClearOcr');
-const ocrStatus = document.getElementById('ocrStatus');
-const ocrText = document.getElementById('ocrText');
-const btnUseOcr = document.getElementById('btnUseOcr');
-
-btnUseCameraOcr.addEventListener('click', () => {
-  imageInput.click();
-});
-
-imageInput.addEventListener('change', async () => {
-  const file = imageInput.files && imageInput.files[0];
-  if (!file) return;
-  
-  // Auto-OCR on upload
-  await performOCR(file);
-});
-
-btnClearOcr.addEventListener('click', () => {
-  imageInput.value = '';
-  ocrText.value = '';
-  ocrStatus.style.display = 'none';
-});
-
-btnUseOcr.addEventListener('click', () => {
-  const q = (ocrText.value || '').trim();
-  if (!q) { 
-    ocrStatus.className = 'status error';
-    ocrStatus.style.display = 'block';
-    ocrStatus.textContent = '❌ Scan text first'; 
-    return; 
-  }
-  window.location.href = '/log-food?q=' + encodeURIComponent(q);
-});
-
-async function performOCR(file){
-  if (!file) return;
-  
-  btnUseCameraOcr.disabled = true;
-  ocrStatus.className = 'status loading';
-  ocrStatus.style.display = 'block';
-  ocrStatus.innerHTML = '<span class="spinner"></span>Extracting text...';
-  
-  try{
-    const form = new FormData();
-    form.append('image', file);
+// Select a food option
+function selectFood(food) {
+    selectedFood = food;
+    baseMacros = {
+        calories: food.calories,
+        protein: food.protein,
+        carbs: food.carbs,
+        fat: food.fat
+    };
     
-    const res = await fetch('/api/ocr-food', { 
-      method: 'POST', 
-      body: form 
+    // Highlight selected card
+    document.querySelectorAll('.food-option-card').forEach(card => {
+        card.classList.remove('border-primary', 'border-3');
     });
+    event.currentTarget.classList.add('border-primary', 'border-3');
     
-    const data = await res.json();
-    
-    if (!res.ok) throw new Error(data.error || 'OCR failed');
-    
-    ocrText.value = data.text || '';
-    ocrStatus.className = 'status success';
-    ocrStatus.textContent = '✅ Text extracted! Edit if needed, then click "Use Text in Food Log"';
-    
-  }catch(e){
-    ocrStatus.className = 'status error';
-    ocrStatus.textContent = '❌ Error: ' + e.message;
-  }finally{
-    btnUseCameraOcr.disabled = false;
-  }
+    // Update details
+    updateSelectedFoodDisplay(1);
+    selectedFoodDetails.style.display = 'block';
+    selectedFoodDetails.scrollIntoView({ behavior: 'smooth' });
 }
+
+// Update selected food display
+function updateSelectedFoodDisplay(quantity) {
+    document.getElementById('selectedCalories').textContent = Math.round(baseMacros.calories * quantity);
+    document.getElementById('selectedProtein').textContent = Math.round(baseMacros.protein * quantity);
+    document.getElementById('selectedCarbs').textContent = Math.round(baseMacros.carbs * quantity);
+    document.getElementById('selectedFat').textContent = Math.round(baseMacros.fat * quantity);
+    document.getElementById('selectedServing').textContent = selectedFood.serving_size;
+    document.getElementById('selectedSource').textContent = selectedFood.source;
+}
+
+// Quantity controls
+document.getElementById('btnDecreaseQty').addEventListener('click', () => {
+    const input = document.getElementById('quantityInput');
+    const newValue = Math.max(0.5, parseFloat(input.value) - 0.5);
+    input.value = newValue;
+    updateSelectedFoodDisplay(newValue);
+});
+
+document.getElementById('btnIncreaseQty').addEventListener('click', () => {
+    const input = document.getElementById('quantityInput');
+    const newValue = parseFloat(input.value) + 0.5;
+    input.value = newValue;
+    updateSelectedFoodDisplay(newValue);
+});
+
+document.getElementById('quantityInput').addEventListener('change', (e) => {
+    const quantity = Math.max(0.1, parseFloat(e.target.value) || 1);
+    e.target.value = quantity;
+    updateSelectedFoodDisplay(quantity);
+});
+
+// Log food
+document.getElementById('btnLogFood').addEventListener('click', async () => {
+    if (!selectedFood) {
+        alert('Please select a food option first');
+        return;
+    }
+    
+    const quantity = parseFloat(document.getElementById('quantityInput').value);
+    
+    const foodData = {
+        description: selectedFood.description,
+        foods: [{
+            ...selectedFood,
+            quantity: quantity,
+            calories: baseMacros.calories * quantity,
+            protein: baseMacros.protein * quantity,
+            carbs: baseMacros.carbs * quantity,
+            fat: baseMacros.fat * quantity
+        }]
+    };
+    
+    try {
+        const response = await fetch('/api/log-food-entry', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(foodData)
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to log food');
+        }
+        
+        alert('✅ Food logged successfully!');
+        window.location.href = '/nutrition';
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Error logging food: ' + error.message);
+    }
+});
+
+// Scan another
+document.getElementById('btnScanAnother').addEventListener('click', () => {
+    btnRetake.click();
+});
 </script>
-</body>
-</html>
+
+<style>
+.food-option-card {
+    transition: all 0.2s;
+}
+
+.food-option-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.border-3 {
+    border-width: 3px !important;
+}
+</style>
+
+{% endblock %}
