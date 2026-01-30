@@ -2680,3 +2680,9 @@ def api_injection_confidence():
         result.pop("debug", None)
     return jsonify(result)
 
+
+# --- Alias to satisfy templates expecting profile_setup_skip ---
+@app.route("/profile-setup/skip", methods=["GET"], endpoint="profile_setup_skip")
+@login_required
+def _profile_setup_skip_alias():
+    return redirect(url_for("profile_skip"))
