@@ -35,11 +35,37 @@ from confidence import compute_injection_confidence
 # -----------------------------------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
-# --- Mobile login / iOS Safari safety fix ---
-from mobile_login_fix import register_mobile_login_fixes
-register_mobile_login_fixes(app)
+
+# --- Diagnostic: log unhandled exceptions with request context (helps debug mobile-only 500s) ---
+import traceback
+from flask import has_request_context
+from flask.signals import got_request_exception
+
+def _log_exception(sender, exception, **extra):
+    try:
+        if not has_request_context():
+            app.logger.exception("Unhandled exception (no request context): %s", exception)
+            return
+        ua = request.headers.get("User-Agent", "")
+        app.logger.error(
+            "Unhandled exception on %s %s endpoint=%s ua=%s session_keys=%s\n%s",
+            request.method,
+            request.path,
+            request.endpoint,
+            ua,
+            list(session.keys()),
+            traceback.format_exc(),
+        )
+    except Exception:
+        # Never allow logging to crash the app
+        app.logger.exception("Failed to log exception")
+
+got_request_exception.connect(_log_exception, app)
+
 
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+app.config["SESSION_COOKIE_SAMESITE"] = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
+app.config["SESSION_COOKIE_SECURE"] = True
 
 # ----------------------------
 # Helpers
