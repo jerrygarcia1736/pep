@@ -107,6 +107,144 @@ def _openai_identify_food_from_image(image_b64: str, mime_type: str = "image/jpe
                 pass
         return {"error": "Model returned non-JSON", "raw": out_text[:2000]}
 
+
+# -----------------------------------------------------------------------------
+# USDA macro lookup helper (FoodData Central)
+# -----------------------------------------------------------------------------
+def _usda_lookup_macros(food_query: str) -> dict:
+    """Lookup calories + macros for a food using USDA FoodData Central search.
+
+    Returns dict with keys: calories, protein, carbs, fat, serving_size_g, source.
+    Best-effort; returns {"error": "..."} on failure.
+    """
+    api_key = os.environ.get("USDA_API_KEY") or os.environ.get("USDA_FOOD_API_KEY")
+    if not api_key:
+        return {"error": "USDA_API_KEY not set"}
+
+    try:
+        r = requests.get(
+            "https://api.nal.usda.gov/fdc/v1/foods/search",
+            params={"api_key": api_key, "query": food_query, "pageSize": 5},
+            timeout=20,
+        )
+        if r.status_code >= 400:
+            return {"error": f"USDA API error {r.status_code}", "details": r.text[:500]}
+
+        j = r.json() or {}
+        foods = j.get("foods") or []
+        if not foods:
+            return {"error": "No USDA matches"}
+
+        best = foods[0]
+        nutrients = best.get("foodNutrients") or []
+
+        def _pick(*names_or_ids):
+            for n in nutrients:
+                nid = n.get("nutrientId")
+                nm = (n.get("nutrientName") or "").lower()
+                unit = (n.get("unitName") or "").lower()
+                val = n.get("value")
+                for x in names_or_ids:
+                    if isinstance(x, int) and nid == x and val is not None:
+                        return float(val)
+                    if isinstance(x, str) and x.lower() in nm and val is not None:
+                        return float(val)
+            return None
+
+        # Common nutrient IDs:
+        # 1008 Energy (kcal), 1003 Protein, 1005 Carbohydrate, 1004 Total lipid (fat)
+        kcal_100g = _pick(1008, "energy")
+        protein_100g = _pick(1003, "protein")
+        carbs_100g = _pick(1005, "carbohydrate")
+        fat_100g = _pick(1004, "total lipid", "fat")
+
+        # Determine serving size (best-effort). Many foods have servingSize in grams.
+        serving_size = best.get("servingSize")
+        serving_unit = (best.get("servingSizeUnit") or "").lower()
+
+        serving_g = None
+        if serving_size and isinstance(serving_size, (int, float)) and serving_unit in ("g", "gram", "grams"):
+            serving_g = float(serving_size)
+
+        # Convert per-100g to per-serving if we have grams; else keep per-100g.
+        factor = (serving_g / 100.0) if serving_g else 1.0
+
+        out = {
+            "calories": round((kcal_100g or 0) * factor, 1) if kcal_100g is not None else None,
+            "protein": round((protein_100g or 0) * factor, 1) if protein_100g is not None else None,
+            "carbs": round((carbs_100g or 0) * factor, 1) if carbs_100g is not None else None,
+            "fat": round((fat_100g or 0) * factor, 1) if fat_100g is not None else None,
+            "serving_size_g": serving_g,  # None means "per 100g"
+            "source": "usda_fdc_search",
+            "fdc_id": best.get("fdcId"),
+            "matched_description": best.get("description") or best.get("lowercaseDescription"),
+        }
+        return out
+    except Exception as e:
+        return {"error": f"USDA lookup failed: {e}"}
+
+
+# -----------------------------------------------------------------------------
+# Peptide label scan helper (OpenAI vision)
+# -----------------------------------------------------------------------------
+def _openai_scan_peptide_label(image_b64: str, peptide_names: list[str], mime_type: str = "image/jpeg") -> dict:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not set"}
+
+    model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4.1-mini")
+    data_url = f"data:{mime_type};base64,{image_b64}"
+
+    prompt = (
+        "You are an OCR + matching assistant for peptide vial labels. "
+        "First, extract the label text you can read. "
+        "Then, match the label to the closest peptide names from this list: "
+        + ", ".join(peptide_names[:200]) + ". "
+        "Return STRICT JSON with keys: raw_text (string), matches (array of objects {name, confidence}), notes (string). "
+        "Confidence is 0-1. Include up to 5 matches. No markdown, no extra text."
+    )
+
+    payload = {
+        "model": model,
+        "input": [
+            {"role": "user", "content": [
+                {"type": "input_text", "text": prompt},
+                {"type": "input_image", "image_url": data_url},
+            ]}
+        ],
+    }
+
+    r = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=45,
+    )
+    if r.status_code >= 400:
+        return {"error": f"OpenAI API error {r.status_code}", "details": r.text[:2000]}
+
+    resp = r.json()
+    text_parts = []
+    for item in resp.get("output", []) or []:
+        for c in item.get("content", []) or []:
+            if c.get("type") in ("output_text", "text"):
+                text_parts.append(c.get("text", ""))
+    out_text = "\n".join([t for t in text_parts if t]).strip() or (resp.get("output_text") or "").strip()
+    if not out_text:
+        return {"error": "No text returned from model"}
+
+    try:
+        return json.loads(out_text)
+    except Exception:
+        m = re.search(r"\{.*\}", out_text, flags=re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+        return {"error": "Model returned non-JSON", "raw": out_text[:2000]}
+
+
 # -----------------------------------------------------------------------------
 # Flask app
 # -----------------------------------------------------------------------------
@@ -748,24 +886,93 @@ def scan_food_photo():
 @app.route("/api/food-photo-identify", methods=["POST"])
 @login_required
 def api_food_photo_identify():
+    """Identify food from an uploaded photo, estimate macros, and optionally save."""
     if "photo" not in request.files:
-        return jsonify({"error": "No photo uploaded"}), 400
+        return jsonify({"ok": False, "error": "No photo uploaded"}), 400
 
     f = request.files["photo"]
     if not f.filename:
-        return jsonify({"error": "Empty filename"}), 400
+        return jsonify({"ok": False, "error": "Empty filename"}), 400
 
     data = f.read()
     if not data:
-        return jsonify({"error": "Empty file"}), 400
+        return jsonify({"ok": False, "error": "Empty file"}), 400
 
-    # Basic mime detection
     mime = f.mimetype or "image/jpeg"
     img_b64 = base64.b64encode(data).decode("utf-8")
 
-    result = _openai_identify_food_from_image(img_b64, mime_type=mime)
-    status = 200 if "error" not in result else 500
-    return jsonify(result), status
+    # 1) Identify the food (OpenAI vision)
+    ident = _openai_identify_food_from_image(img_b64, mime_type=mime)
+    if "error" in ident:
+        return jsonify({"ok": False, "error": ident.get("error"), "details": ident.get("details"), "raw": ident.get("raw")}), 500
+
+    name = (ident.get("name") or "").strip()
+    confidence = ident.get("confidence")
+    alternatives = ident.get("alternatives") or []
+    notes = ident.get("notes") or ""
+
+    if not name:
+        return jsonify({"ok": False, "error": "Could not identify food"}), 500
+
+    # 2) Lookup macros (USDA FoodData Central)
+    macros = _usda_lookup_macros(name)
+    if "error" in macros:
+        # Still return identification even if macros fail
+        out = {
+            "ok": True,
+            "name": name,
+            "item": name,  # compatibility with older templates
+            "confidence": confidence,
+            "alternatives": alternatives,
+            "notes": notes,
+            "macro_error": macros.get("error"),
+        }
+        return jsonify(out), 200
+
+    out = {
+        "ok": True,
+        "name": name,
+        "item": name,
+        "confidence": confidence,
+        "alternatives": alternatives,
+        "notes": notes,
+        "calories": macros.get("calories"),
+        "protein": macros.get("protein"),
+        "carbs": macros.get("carbs"),
+        "fat": macros.get("fat"),
+        "serving_size_g": macros.get("serving_size_g"),
+        "matched_description": macros.get("matched_description"),
+        "source": macros.get("source"),
+    }
+
+    # 3) Optional auto-save (default ON for scanner)
+    autosave = request.args.get("autosave", "1") == "1"
+    if autosave:
+        u = get_current_user()
+        if u:
+            try:
+                db = get_session(db_url)
+                try:
+                    food_log = FoodLog(
+                        user_id=u.id,
+                        description=name,
+                        total_calories=out.get("calories") or 0,
+                        total_protein_g=out.get("protein") or 0,
+                        total_fat_g=out.get("fat") or 0,
+                        total_carbs_g=out.get("carbs") or 0,
+                        raw_data=json.dumps({"ident": ident, "macros": macros})[:5000],
+                    )
+                    db.add(food_log)
+                    db.commit()
+                    out["saved"] = True
+                    out["food_log_id"] = food_log.id
+                finally:
+                    db.close()
+            except Exception as e:
+                out["saved"] = False
+                out["save_error"] = str(e)
+
+    return jsonify(out), 200
 
 @app.route("/scan-food", methods=["GET"])
 @login_required
@@ -797,168 +1004,53 @@ def scan_nutrition():
 @app.route("/scan-peptides", methods=["GET"])
 @login_required
 def scan_peptides():
+    """Phase 1: native-camera peptide label scan UI."""
+    autocam = request.args.get("autocam") == "1"
+    return render_template("scan_peptides.html", autocam=autocam)
+
+
+@app.route("/api/scan-peptide-label", methods=["POST"])
+@login_required
+def api_scan_peptide_label():
+    """Accepts an image and returns OCR + best peptide name matches."""
+    if "image" not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
+
+    f = request.files["image"]
+    data = f.read()
+    if not data:
+        return jsonify({"error": "Empty file"}), 400
+
+    mime = f.mimetype or "image/jpeg"
+    img_b64 = base64.b64encode(data).decode("utf-8")
+
     peptides = _load_peptides_list()
-    peptide_names = [p.get("name","") for p in peptides if p.get("name")]
+    peptide_names = [p.get("name", "") for p in peptides if p.get("name")]
 
-    html = """<!doctype html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Scan Peptides</title>
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
-    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
-    h1{font-size:20px;margin:0 0 6px;}
-    .muted{color:#666;font-size:13px;line-height:1.4}
-    input[type=file]{width:100%;}
-    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
-    .btn:disabled{opacity:.5;cursor:not-allowed;}
-    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
-    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
-    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
-    .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
-    .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
-    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-      <div>
-        <h1>📦 Scan Peptides</h1>
-        <div class="muted">Take a photo of the box/kit label (handwritten or printed). We’ll extract text and suggest peptide matches.</div>
-      </div>
-      <div class="toplinks">
-        <a class="linkbtn" href="/add-vial">➕ Add Vial</a>
-        <a class="linkbtn" href="/pep-ai">🤖 Pep AI</a>
-      </div>
-    </div>
+    result = _openai_scan_peptide_label(img_b64, peptide_names=peptide_names, mime_type=mime)
+    if "error" in result:
+        return jsonify(result), 500
 
-    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light.</div></div>
-
-    <div style="margin-top:10px;">
-      <input id="pepPhoto" type="file" accept="image/*" capture="environment" />
-    </div>
-
-    <div class="row">
-      <button class="btn" id="btnOcrPep" type="button" disabled>🔎 OCR Label</button>
-    </div>
-
-    <div style="margin-top:10px;">
-      <textarea id="pepText" placeholder="OCR text will appear here..."></textarea>
-    </div>
-
-    <div id="matchBox" class="box" style="display:none;">
-      <div class="muted" style="margin-bottom:6px;"><b>Tap a suggested peptide:</b></div>
-      <div id="matchChips" class="row"></div>
-      <div class="muted" style="margin-top:8px;">This will take you to <b>Add Vial</b> with a reminder to select this peptide.</div>
-    </div>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script>
-    const peptideNames = {{ peptide_names | tojson }};
-    const pepPhoto = document.getElementById("pepPhoto");
-    const btn = document.getElementById("btnOcrPep");
-    const pepText = document.getElementById("pepText");
-    const matchBox = document.getElementById("matchBox");
-    const matchChips = document.getElementById("matchChips");
-
-	    // Auto-open native camera picker when launched from navbar links
-	    // like /scan-peptides?autocam=1
-	    try {
-	      const params = new URLSearchParams(window.location.search);
-	      if (params.get("autocam") === "1") {
-	        setTimeout(() => pepPhoto.click(), 350);
-	      }
-	    } catch (e) {}
-
-    pepPhoto.addEventListener("change", () => {
-      const file = pepPhoto.files && pepPhoto.files[0];
-      btn.disabled = !file;
-      pepText.value = "";
-      matchBox.style.display = "none";
-      matchChips.innerHTML = "";
-    });
-
-    function normalize(s){
-      return (s||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").replace(/\s+/g," ").trim();
+    # Normalize to what the template expects
+    matches = result.get("matches") or []
+    # Ensure each match has name/confidence
+    cleaned = []
+    for m in matches[:5]:
+        nm = (m.get("name") or "").strip()
+        if not nm:
+            continue
+        conf = m.get("confidence")
+        try:
+            conf = float(conf) if conf is not None else None
+        except Exception:
+            conf = None
+        cleaned.append({"name": nm, "confidence": conf})
+    out = {
+        "raw_text": result.get("raw_text") or "",
+        "matches": cleaned,
+        "notes": result.get("notes") or "",
     }
-
-    function scoreMatch(text, name){
-      const t = normalize(text);
-      const n = normalize(name);
-      if (!t || !n) return 0;
-      if (t.includes(n)) return 100;
-      const tset = new Set(t.split(" "));
-      const nset = new Set(n.split(" "));
-      let overlap = 0;
-      for (const tok of nset){ if (tset.has(tok)) overlap++; }
-      return overlap;
-    }
-
-    function buildSuggestions(text){
-      const scored = peptideNames.map(n => ({name:n, score: scoreMatch(text,n)}))
-                                .filter(x => x.score > 0)
-                                .sort((a,b) => b.score - a.score)
-                                .slice(0,8);
-      return scored;
-    }
-
-    btn.addEventListener("click", async () => {
-      const file = pepPhoto.files && pepPhoto.files[0];
-      if (!file) return;
-
-      btn.disabled = true;
-      btn.textContent = "Running OCR...";
-      try{
-        const { data } = await Tesseract.recognize(file, "eng");
-        const text = (data && data.text) ? data.text.trim() : "";
-        pepText.value = text;
-
-        const suggestions = buildSuggestions(text);
-        matchChips.innerHTML = "";
-
-        if (suggestions.length){
-          suggestions.forEach(s => {
-            const chip = document.createElement("div");
-            chip.className = "chip";
-            chip.textContent = s.name;
-            chip.addEventListener("click", () => {
-              const u = new URL(window.location.origin + "/add-vial");
-              u.searchParams.set("suggest_peptide", s.name);
-              window.location.href = u.toString();
-            });
-            matchChips.appendChild(chip);
-          });
-          matchBox.style.display = "block";
-        } else {
-          matchBox.style.display = "block";
-          matchChips.innerHTML = "<div class='muted'>No confident match found — try a closer photo, or just go to Add Vial and select manually.</div>";
-        }
-
-      }catch(err){
-        alert("OCR failed. Try again with brighter lighting and closer focus.");
-      }finally{
-        btn.disabled = false;
-        btn.textContent = "🔎 OCR Label";
-      }
-    });
-  </script>
-</body>
-</html>"""
-    return render_template_string(html, peptide_names=peptide_names)
-
-
-@app.before_request
-def _scan_hint_flash():
-    try:
-        if request.method == "GET" and request.path == "/add-vial":
-            sugg = (request.args.get("suggest_peptide") or "").strip()
-            if sugg:
-                flash(f"Scan suggestion: {sugg}. Please select it below (and enter mg amount).", "info")
-    except Exception:
-        pass
+    return jsonify(out), 200
 
 
 @app.route("/")
@@ -1045,6 +1137,45 @@ def logout():
 def dashboard():
     stats, protocols, recent_injections = _compute_dashboard_context()
     profile = get_user_profile(session["user_id"])
+
+    # Recent food logs (best-effort)
+    food_logs = []
+    food_totals_today = {"calories": 0, "protein": 0, "carbs": 0, "fat": 0}
+    try:
+        u = get_current_user()
+        if u:
+            db = get_session(db_url)
+            try:
+                # last 20 entries
+                food_logs = (
+                    db.query(FoodLog)
+                    .filter(FoodLog.user_id == u.id)
+                    .order_by(FoodLog.timestamp.desc())
+                    .limit(20)
+                    .all()
+                )
+                # today totals (server timezone)
+                from datetime import date
+                today = date.today()
+                todays = (
+                    db.query(FoodLog)
+                    .filter(FoodLog.user_id == u.id)
+                    .filter(func.date(FoodLog.timestamp) == today)
+                    .all()
+                )
+                for r in todays:
+                    food_totals_today["calories"] += float(r.total_calories or 0)
+                    food_totals_today["protein"] += float(r.total_protein_g or 0)
+                    food_totals_today["carbs"] += float(r.total_carbs_g or 0)
+                    food_totals_today["fat"] += float(r.total_fat_g or 0)
+                # round
+                for k in food_totals_today:
+                    food_totals_today[k] = round(food_totals_today[k], 1)
+            finally:
+                db.close()
+    except Exception as e:
+        print(f"Food logs dashboard fallback (non-fatal): {e}")
+
     return render_if_exists(
         "dashboard.html",
         fallback_endpoint="index",
@@ -1052,7 +1183,10 @@ def dashboard():
         protocols=protocols,
         recent_injections=recent_injections,
         profile=profile,
+        food_logs=food_logs,
+        food_totals_today=food_totals_today,
     )
+
 
 # -----------------------------------------------------------------------------
 # Password Reset Routes
@@ -1595,7 +1729,9 @@ def api_log_food():
         
         db = get_session(db_url)
         try:
-            food_log = FoodLog(                description=description,
+            food_log = FoodLog(
+                user_id=get_current_user().id,
+                description=description,
                 total_calories=total_calories,
                 total_protein_g=total_protein_g,
                 total_fat_g=total_fat_g,

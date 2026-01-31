@@ -1,59 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - Peptide Tracker
-
-<!-- Feature Highlights (same as logged-out home) -->
-<div class="row g-4 mt-4">
-  <div class="col-12">
-    <div class="card shadow-sm border-0">
-      <div class="card-header bg-white">
-        <h5 class="mb-0"><i class="bi bi-stars me-2"></i>What you can do here</h5>
-      </div>
-      <div class="card-body p-4">
-        <div class="row g-3">
-          <div class="col-md-6">
-            <div class="d-flex gap-3 mb-3">
-              <i class="bi bi-check-circle-fill text-success fs-5"></i>
-              <div><span class="fw-semibold">Scan Nutrition (photo)</span> - Take a picture and get estimated macros instantly</div>
-            </div>
-            <div class="d-flex gap-3 mb-3">
-              <i class="bi bi-check-circle-fill text-success fs-5"></i>
-              <div><span class="fw-semibold">Scan Peptides (label)</span> - Snap a vial label and match to known peptides</div>
-            </div>
-            <div class="d-flex gap-3 mb-3">
-              <i class="bi bi-check-circle-fill text-success fs-5"></i>
-              <div><span class="fw-semibold">Reconstitution Calculator</span> - Calculate concentrations and dosages</div>
-            </div>
-            <div class="d-flex gap-3">
-              <i class="bi bi-check-circle-fill text-success fs-5"></i>
-              <div><span class="fw-semibold">Vial Management</span> - Track inventory and expiration dates</div>
-            </div>
-          </div>
-          <div class="col-md-6">
-            <div class="d-flex gap-3 mb-3">
-              <i class="bi bi-check-circle-fill text-success fs-5"></i>
-              <div><span class="fw-semibold">Protocol Creation</span> - Define dosing schedules and cycles</div>
-            </div>
-            <div class="d-flex gap-3 mb-3">
-              <i class="bi bi-check-circle-fill text-success fs-5"></i>
-              <div><span class="fw-semibold">Injection Logging</span> - Record each injection with notes</div>
-            </div>
-            <div class="d-flex gap-3 mb-3">
-              <i class="bi bi-check-circle-fill text-success fs-5"></i>
-              <div><span class="fw-semibold">Pep AI</span> - Ask questions and get protocol-aware reminders</div>
-            </div>
-            <div class="d-flex gap-3">
-              <i class="bi bi-check-circle-fill text-success fs-5"></i>
-              <div><span class="fw-semibold">Syringe Checker</span> - Coming next: verify dose volume against protocol using the camera</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-{% endblock %}
+{% block title %}Dashboard - Peptide Tracker{% endblock %}
 
 {% block content %}
 
@@ -76,6 +23,57 @@
 <h1 class="mb-4">
   <i class="bi bi-speedometer2"></i> Dashboard
 </h1>
+
+<!-- Food Today -->
+<div class="row g-4 mb-4">
+  <div class="col-12">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <div class="fw-semibold"><i class="bi bi-egg-fried me-2"></i>Food today</div>
+        <a class="btn btn-sm btn-success" href="/scan-nutrition?autocam=1"><i class="bi bi-camera"></i> Scan food</a>
+      </div>
+      <div class="card-body">
+        <div class="row text-center mb-3">
+          <div class="col"><div class="text-muted small">Calories</div><div class="fw-semibold">{{ food_totals_today.calories if food_totals_today is defined else 0 }}</div></div>
+          <div class="col"><div class="text-muted small">Protein</div><div class="fw-semibold">{{ food_totals_today.protein if food_totals_today is defined else 0 }} g</div></div>
+          <div class="col"><div class="text-muted small">Carbs</div><div class="fw-semibold">{{ food_totals_today.carbs if food_totals_today is defined else 0 }} g</div></div>
+          <div class="col"><div class="text-muted small">Fat</div><div class="fw-semibold">{{ food_totals_today.fat if food_totals_today is defined else 0 }} g</div></div>
+        </div>
+
+        {% if food_logs is defined and food_logs and food_logs|length > 0 %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Item</th>
+                  <th class="text-end">Cal</th>
+                  <th class="text-end">P</th>
+                  <th class="text-end">C</th>
+                  <th class="text-end">F</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for f in food_logs[:10] %}
+                <tr>
+                  <td class="text-muted small">{{ f.timestamp.strftime("%-I:%M %p") if f.timestamp else "" }}</td>
+                  <td>{{ f.description }}</td>
+                  <td class="text-end">{{ "%.0f"|format(f.total_calories or 0) }}</td>
+                  <td class="text-end">{{ "%.1f"|format(f.total_protein_g or 0) }}</td>
+                  <td class="text-end">{{ "%.1f"|format(f.total_carbs_g or 0) }}</td>
+                  <td class="text-end">{{ "%.1f"|format(f.total_fat_g or 0) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="text-muted">No food logged yet today. Tap “Scan food” to add one.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Stats Cards -->
 <div class="row g-4 mb-4">

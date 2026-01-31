@@ -100,6 +100,8 @@
     html += `<div class="col"><div class="text-muted small">Carbs</div><div class="fw-semibold">${c ?? '—'}</div></div>`;
     html += `<div class="col"><div class="text-muted small">Fat</div><div class="fw-semibold">${f ?? '—'}</div></div>`;
     html += `</div></div></div>`;
+    if (data?.saved){ html += `<div class="alert alert-secondary mt-2 mb-0">✅ Saved to your dashboard</div>`; }
+
 
     result.innerHTML = html;
     result.style.display = 'block';
@@ -115,7 +117,7 @@
       // Backend expects field name "photo" (matches /api/food-photo-identify)
       fd.append('photo', file, file.name || 'food.jpg');
 
-      const resp = await fetch('{{ url_for("api_food_photo_identify") }}', { method: 'POST', body: fd });
+      const resp = await fetch('{{ url_for("api_food_photo_identify") }}?autosave=1', { method: 'POST', body: fd });
       const data = await resp.json().catch(() => ({}));
 
       if (!resp.ok || data?.ok === false) {
