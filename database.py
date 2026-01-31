@@ -207,21 +207,17 @@ class PeptideDB:
     
     def get_protocol(self, protocol_id: int) -> Optional[Protocol]:
         """Get protocol by ID"""
-        return (
-            self.session.query(Protocol)
-            .options(joinedload(Protocol.peptide))
-            .filter(Protocol.id == protocol_id)
-            .first()
-        )
+        return self.session.query(Protocol).filter(Protocol.id == protocol_id).first()
     
     def list_active_protocols(self) -> List[Protocol]:
         """List all active protocols"""
-        # Eager-load Protocol.peptide so templates can safely access
-        # protocol.peptide.name after the session is closed.
+        # Eager-load related Peptide to avoid DetachedInstanceError when templates
+        # access protocol.peptide after the request/session lifecycle.
         return (
             self.session.query(Protocol)
             .options(joinedload(Protocol.peptide))
             .filter(Protocol.is_active == True)
+            .order_by(Protocol.start_date.desc())
             .all()
         )
     

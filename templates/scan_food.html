@@ -112,8 +112,8 @@
     try {
       showPreview(file);
       const fd = new FormData();
-      // Backend expects field name "image"
-      fd.append('image', file, file.name || 'food.jpg');
+      // Backend expects field name "photo" (matches /api/food-photo-identify)
+      fd.append('photo', file, file.name || 'food.jpg');
 
       const resp = await fetch('{{ url_for("api_food_photo_identify") }}', { method: 'POST', body: fd });
       const data = await resp.json().catch(() => ({}));
