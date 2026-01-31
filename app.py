@@ -45,15 +45,29 @@ def _openai_identify_food_from_image(image_b64: str, mime_type: str = "image/jpe
 
     data_url = f"data:{mime_type};base64,{image_b64}"
 
-    prompt = (
-        "You are a food recognition assistant. "
-        "Identify the most likely food in the image. "
-        "Return STRICT JSON with keys: "
-        "name (string), confidence (number 0-1), alternatives (array of strings), "
-        "and notes (short string). "
-        "If multiple foods are present, pick the primary one and mention others in notes. "
-        "No markdown, no extra text."
-    )
+    prompt = """
+You are a nutrition assistant. Analyze the photo and return ONLY strict JSON.
+Goal: identify the food item as accurately as possible. If the item is packaged and a label is visible, use the visible text to determine the exact variant (e.g., diet/zero sugar/mini/caffeine-free).
+
+Return JSON with this exact schema:
+{
+  "name": string,                 # canonical food name with key modifiers (e.g., "Diet Canada Dry Ginger Ale")
+  "confidence": number,           # 0-1
+  "alternatives": [string],       # up to 3 plausible alternatives
+  "notes": string,                # short notes about what you saw / assumptions
+  "nutrition": {                  # ONLY if you can read a nutrition label clearly
+     "serving_desc": string,
+     "calories": number,
+     "protein_g": number,
+     "carbs_g": number,
+     "fat_g": number
+  } | null
+}
+
+Rules:
+- If you cannot read the nutrition label clearly, set nutrition to null (do NOT guess).
+- Prefer accuracy over verbosity. No markdown, no extra text.
+""".strip()
 
     payload = {
         "model": model,
@@ -195,14 +209,25 @@ def _openai_scan_peptide_label(image_b64: str, peptide_names: list[str], mime_ty
     model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4.1-mini")
     data_url = f"data:{mime_type};base64,{image_b64}"
 
-    prompt = (
-        "You are an OCR + matching assistant for peptide vial labels. "
-        "First, extract the label text you can read. "
-        "Then, match the label to the closest peptide names from this list: "
-        + ", ".join(peptide_names[:200]) + ". "
-        "Return STRICT JSON with keys: raw_text (string), matches (array of objects {name, confidence}), notes (string). "
-        "Confidence is 0-1. Include up to 5 matches. No markdown, no extra text."
-    )
+    prompt = """
+You are an OCR + parsing assistant for peptide vial labels (printed OR handwritten).
+Extract the most likely peptide name(s) and any quantity information from the label.
+
+Return ONLY strict JSON with this schema:
+{
+  "text": string,                  # best-effort transcription of visible label text
+  "peptides": [string],            # peptide names found (normalized)
+  "quantities": [
+    {"amount": number, "unit": "mg"|"mcg"|"iu"|null}
+  ],
+  "confidence": number,            # 0-1 overall confidence
+  "candidates": [string]           # up to 8 likely peptide name guesses if uncertain
+}
+
+Rules:
+- If handwritten is unclear, still provide candidates.
+- Keep output as JSON only. No markdown, no extra text.
+""".strip()
 
     payload = {
         "model": model,
@@ -914,8 +939,29 @@ def api_food_photo_identify():
     if not name:
         return jsonify({"ok": False, "error": "Could not identify food"}), 500
 
-    # 2) Lookup macros (USDA FoodData Central)
-    macros = _usda_lookup_macros(name)
+    # 2) Lookup macros
+    # If a nutrition label is readable, prefer label-derived macros (helps differentiate diet/zero variants).
+    nutrition = ai.get("nutrition") if isinstance(ai, dict) else None
+    macros = None
+    if nutrition and isinstance(nutrition, dict):
+        try:
+            macros = {
+                "calories": float(nutrition.get("calories")) if nutrition.get("calories") is not None else None,
+                "protein": float(nutrition.get("protein_g")) if nutrition.get("protein_g") is not None else None,
+                "carbs": float(nutrition.get("carbs_g")) if nutrition.get("carbs_g") is not None else None,
+                "fat": float(nutrition.get("fat_g")) if nutrition.get("fat_g") is not None else None,
+                "serving_size_g": None,
+                "matched_description": nutrition.get("serving_desc") or "nutrition label",
+                "source": "label_ocr",
+            }
+            # If any key is missing, fall back to USDA
+            if any(macros[k] is None for k in ("calories", "protein", "carbs", "fat")):
+                macros = None
+        except Exception:
+            macros = None
+
+    if macros is None:
+        macros = _usda_lookup_macros(name)
     if "error" in macros:
         # Still return identification even if macros fail
         out = {
@@ -1001,6 +1047,56 @@ def scan_nutrition():
     # Phase 1: use native camera capture via <input type=file capture="environment">
     # This is the most reliable behavior on iPhone Safari.
     return render_template("scan_food.html", autocam=autocam)
+
+@app.post("/api/food-log/<int:food_log_id>/update")
+@login_required
+def api_update_food_log(food_log_id: int):
+    """Allow users to correct/override macros after scan."""
+    data = request.get_json(silent=True) or {}
+    log = FoodLog.query.filter_by(id=food_log_id, user_id=current_user.id).first()
+    if not log:
+        return jsonify({"error": "Not found"}), 404
+
+    def _f(x):
+        try:
+            return float(x)
+        except Exception:
+            return None
+
+    # Allow updating name + macros
+    name = (data.get("food_name") or data.get("name") or "").strip()
+    if name:
+        log.food_name = name[:200]
+
+    calories = _f(data.get("calories"))
+    protein = _f(data.get("protein"))
+    carbs = _f(data.get("carbs"))
+    fat = _f(data.get("fat"))
+
+    # Only update fields that are provided (not None)
+    if calories is not None:
+        log.calories = calories
+    if protein is not None:
+        log.protein_g = protein
+    if carbs is not None:
+        log.carbs_g = carbs
+    if fat is not None:
+        log.fat_g = fat
+
+    log.source = (data.get("source") or log.source or "manual_edit")[:50]
+
+    db.session.commit()
+    return jsonify({
+        "success": True,
+        "food_log_id": log.id,
+        "food_name": log.food_name,
+        "calories": log.calories,
+        "protein": log.protein_g,
+        "carbs": log.carbs_g,
+        "fat": log.fat_g,
+        "source": log.source,
+    })
+
 @app.route("/scan-peptides", methods=["GET"])
 @login_required
 def scan_peptides():
@@ -1052,6 +1148,50 @@ def api_scan_peptide_label():
     }
     return jsonify(out), 200
 
+
+
+@app.post("/api/save-scanned-peptide")
+@login_required
+def api_save_scanned_peptide():
+    """Create a vial from a scan result so user doesn't have to type."""
+    data = request.get_json(silent=True) or {}
+    peptide_name = (data.get("peptide_name") or data.get("name") or "").strip()
+    if not peptide_name:
+        return jsonify({"error": "peptide_name required"}), 400
+
+    def _f(x):
+        try:
+            return float(x)
+        except Exception:
+            return None
+
+    vial_size_mg = _f(data.get("vial_size_mg"))
+    if vial_size_mg is None:
+        vial_size_mg = 0.0
+
+    peptide = Peptide.query.filter(Peptide.name.ilike(peptide_name)).first()
+    if not peptide:
+        peptide = Peptide(name=peptide_name)
+        db.session.add(peptide)
+        db.session.flush()
+
+    vial = Vial(
+        user_id=current_user.id,
+        peptide_id=peptide.id,
+        vial_size_mg=vial_size_mg,
+        bac_water_ml=_f(data.get("bac_water_ml") or 0.0),
+        notes=(data.get("notes") or data.get("raw_text") or "")[:300],
+        received_date=date.today(),
+    )
+    db.session.add(vial)
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "vial_id": vial.id,
+        "peptide_name": peptide.name,
+        "vial_size_mg": vial.vial_size_mg,
+    })
 
 @app.route("/")
 def index():
