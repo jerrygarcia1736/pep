@@ -147,314 +147,9 @@ Rules:
             if c.get("type") in ("output_text", "text"):
                 text_parts.append(c.get("text", ""))
     out_text = "\n".join([t for t in text_parts if t]).strip()
-
     if not out_text:
-        # fallback: some responses may include 'output_text' at top-level in docs examples
         out_text = (resp.get("output_text") or "").strip()
 
-    if not out_text:
-        return {"error": "No text returned from model"}
-
-    # Parse JSON safely
-    try:
-        return json.loads(out_text)
-    except Exception:
-        # try to locate a JSON object in the text
-        m = re.search(r"\{.*\}", out_text, flags=re.S)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                pass
-        return {"error": "Model returned non-JSON", "raw": out_text[:2000]}
-
-
-# -----------------------------------------------------------------------------
-# Equipment / gym scan helper (category-level MVP)
-# -----------------------------------------------------------------------------
-_EQUIPMENT_CATEGORIES = [
-    {"key": "machine_strength", "label": "Strength Machine"},
-    {"key": "cables", "label": "Cable Machine"},
-    {"key": "free_weights", "label": "Free Weights"},
-    {"key": "cardio", "label": "Cardio"},
-    {"key": "other", "label": "Other / Unknown"},
-]
-
-def _coerce_equipment_category(cat: str | None) -> str:
-    if not cat:
-        return "other"
-    cat = str(cat).strip().lower()
-    allowed = {c["key"] for c in _EQUIPMENT_CATEGORIES}
-    # common aliases
-    aliases = {
-        "machine": "machine_strength",
-        "strength_machine": "machine_strength",
-        "strength": "machine_strength",
-        "cable": "cables",
-        "cable_machine": "cables",
-        "freeweight": "free_weights",
-        "free weight": "free_weights",
-        "weights": "free_weights",
-        "dumbbells": "free_weights",
-        "barbell": "free_weights",
-        "treadmill": "cardio",
-        "bike": "cardio",
-        "elliptical": "cardio",
-    }
-    cat = aliases.get(cat, cat)
-    return cat if cat in allowed else "other"
-
-def _openai_identify_equipment_from_image(image_b64: str, mime_type: str = "image/jpeg") -> dict:
-    """Identify gym equipment category from an image using OpenAI Responses API.
-
-    Returns dict: {category, confidence, alternatives, notes}
-    """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return {"error": "OPENAI_API_KEY not set"}
-
-    model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4.1-mini")
-    data_url = f"data:{mime_type};base64,{image_b64}"
-
-    allowed = [c["key"] for c in _EQUIPMENT_CATEGORIES]
-    prompt = f"""
-You are a gym equipment classifier. Analyze the photo and return ONLY strict JSON.
-
-Goal: classify the equipment into ONE category from this allowed list:
-{allowed}
-
-Return JSON with this exact schema:
-{{
-  "category": string,        # one of the allowed list
-  "confidence": number,      # 0-1
-  "alternatives": [string],  # up to 3 from the allowed list (excluding category)
-  "notes": string            # short notes about what you saw
-}}
-
-Rules:
-- If uncertain, choose "other" with low confidence.
-- Do not guess specific exercise names.
-- No markdown, no extra text.
-""".strip()
-
-    payload = {
-        "model": model,
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            }
-        ],
-    }
-
-    r = requests.post(
-        "https://api.openai.com/v1/responses",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=45,
-    )
-    if r.status_code >= 400:
-        return {"error": f"OpenAI API error {r.status_code}", "details": r.text[:2000]}
-
-    try:
-        data = r.json()
-        out = data.get("output", [])
-        txt = ""
-        for item in out:
-            for c in item.get("content", []) or []:
-                if c.get("type") == "output_text":
-                    txt += c.get("text", "")
-        txt = (txt or "").strip()
-        j = json.loads(txt)
-        cat = _coerce_equipment_category(j.get("category"))
-        conf = float(j.get("confidence") or 0)
-        alts_raw = j.get("alternatives") or []
-        alts = []
-        for a in alts_raw[:3]:
-            a2 = _coerce_equipment_category(a)
-            if a2 != cat and a2 not in alts:
-                alts.append(a2)
-        return {
-            "category": cat,
-            "confidence": max(0.0, min(1.0, conf)),
-            "alternatives": alts,
-            "notes": (j.get("notes") or "")[:300],
-        }
-    except Exception:
-        return {"error": "Failed to parse OpenAI response", "details": r.text[:2000]}
-
-
-# -----------------------------------------------------------------------------
-# USDA macro lookup helper (FoodData Central)
-# -----------------------------------------------------------------------------
-def _usda_lookup_macros(food_query: str) -> dict:
-    """Lookup calories + macros for a food using USDA FoodData Central search.
-
-    Returns dict with keys: calories, protein, carbs, fat, serving_size_g, source.
-    Best-effort; returns {"error": "..."} on failure.
-    """
-    api_key = os.environ.get("USDA_API_KEY") or os.environ.get("USDA_FOOD_API_KEY")
-    if not api_key:
-        return {"error": "USDA_API_KEY not set"}
-
-    try:
-        r = requests.get(
-            "https://api.nal.usda.gov/fdc/v1/foods/search",
-            params={"api_key": api_key, "query": food_query, "pageSize": 5},
-            timeout=20,
-        )
-        if r.status_code >= 400:
-            return {"error": f"USDA API error {r.status_code}", "details": r.text[:500]}
-
-        j = r.json() or {}
-        foods = j.get("foods") or []
-        if not foods:
-            return {"error": "No USDA matches"}
-
-        best = foods[0]
-        nutrients = best.get("foodNutrients") or []
-
-        def _pick(*names_or_ids):
-            for n in nutrients:
-                nid = n.get("nutrientId")
-                nm = (n.get("nutrientName") or "").lower()
-                unit = (n.get("unitName") or "").lower()
-                val = n.get("value")
-                for x in names_or_ids:
-                    if isinstance(x, int) and nid == x and val is not None:
-                        return float(val)
-                    if isinstance(x, str) and x.lower() in nm and val is not None:
-                        return float(val)
-            return None
-
-        # Common nutrient IDs:
-        # 1008 Energy (kcal), 1003 Protein, 1005 Carbohydrate, 1004 Total lipid (fat)
-        kcal_100g = _pick(1008, "energy")
-        protein_100g = _pick(1003, "protein")
-        carbs_100g = _pick(1005, "carbohydrate")
-        fat_100g = _pick(1004, "total lipid", "fat")
-
-        # Determine serving size (best-effort). Many foods have servingSize in grams.
-        serving_size = best.get("servingSize")
-        serving_unit = (best.get("servingSizeUnit") or "").lower()
-
-        serving_g = None
-        if serving_size and isinstance(serving_size, (int, float)) and serving_unit in ("g", "gram", "grams"):
-            serving_g = float(serving_size)
-
-        # Convert per-100g to per-serving if we have grams; else keep per-100g.
-        factor = (serving_g / 100.0) if serving_g else 1.0
-
-        out = {
-            "calories": round((kcal_100g or 0) * factor, 1) if kcal_100g is not None else None,
-            "protein": round((protein_100g or 0) * factor, 1) if protein_100g is not None else None,
-            "carbs": round((carbs_100g or 0) * factor, 1) if carbs_100g is not None else None,
-            "fat": round((fat_100g or 0) * factor, 1) if fat_100g is not None else None,
-            "serving_size_g": serving_g,  # None means "per 100g"
-            "source": "usda_fdc_search",
-            "fdc_id": best.get("fdcId"),
-            "matched_description": best.get("description") or best.get("lowercaseDescription"),
-        }
-        return out
-    except Exception as e:
-        return {"error": f"USDA lookup failed: {e}"}
-
-
-# -----------------------------------------------------------------------------
-# Peptide label scan helper (OpenAI vision)
-# -----------------------------------------------------------------------------
-def _openai_scan_peptide_label(image_b64: str, peptide_names: list[str], mime_type: str = "image/jpeg") -> dict:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return {"error": "OPENAI_API_KEY not set"}
-
-    model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4.1-mini")
-    data_url = f"data:{mime_type};base64,{image_b64}"
-
-    # Provide the model a constrained list to reduce hallucinations and improve handwriting guesses
-    known_list = ", ".join([p for p in (peptide_names or []) if p])[:6000]
-
-    prompt = f"""
-You are an OCR + parsing assistant for peptide vial/box labels (printed OR handwritten).
-Extract the most likely peptide name(s) and any quantity information from the label.
-
-Strong preference:
-- Choose peptide names from this known list when possible:
-{known_list}
-
-User's most common peptides (extra bias):
-{", ".join(TOP_PEPTIDES)}
-
-Return ONLY strict JSON with this schema:
-{{
-  "text": string,                  # best-effort transcription of visible label text
-  "peptides": [string],            # peptide names found (best guess)
-  "quantities": [
-    {{"amount": number, "unit": "mg"|"mcg"|"iu"|null}}
-  ],
-  "confidence": number,            # 0-1 overall confidence
-  "candidates": [string]           # up to 8 likely peptide name guesses if uncertain
-}}
-
-Rules:
-- If handwritten is unclear, still provide candidates (best guesses).
-- Normalize common forms: TB500→TB-500, BPC 157→BPC-157, PT141→PT-141, MT2→MT-2, semiglutide→semaglutide.
-- Keep output as JSON only. No markdown, no extra text.
-""".strip()
-
-    payload = {
-        "model": model,
-        "input": [
-            {"role": "user", "content": [
-                {"type": "input_text", "text": prompt},
-                {"type": "input_image", "image_url": data_url},
-            ]}
-        ],
-    }
-
-    r = requests.post(
-        "https://api.openai.com/v1/responses",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=45,
-    )
-    if r.status_code >= 400:
-        return {"error": f"OpenAI API error {r.status_code}", "details": r.text[:2000]}
-
-    resp = r.json()
-    text_parts = []
-    for item in resp.get("output", []) or []:
-        for c in item.get("content", []) or []:
-            if c.get("type") in ("output_text", "text"):
-                text_parts.append(c.get("text", ""))
-    out_text = "\n".join([t for t in text_parts if t]).stclass EquipmentScan(ModelBase):
-    __tablename__ = "equipment_scans"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    image_sha = Column(String(64), nullable=True, index=True)
-    predicted_category = Column(String(50), nullable=True)
-    confidence = Column(Float, nullable=True)
-    alternatives_json = Column(String(500), nullable=True)
-    notes = Column(String(300), nullable=True)
-    corrected_category = Column(String(50), nullable=True)
-
-class WorkoutLog(ModelBase):
-    __tablename__ = "workout_logs"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    performed_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    equipment_category = Column(String(50), nullable=False, index=True)
-    exercise_name = Column(String(120), nullable=True)
-    sets = Column(Integer, nullable=True)
-    reps = Column(Integer, nullable=True)
-    weight = Column(Float, nullable=True)
-    notes = Column(String(300), nullable=True)
-
-rip() or (resp.get("output_text") or "").strip()
     if not out_text:
         return {"error": "No text returned from model"}
 
@@ -512,6 +207,36 @@ def from_json_filter(value):
 # -----------------------------------------------------------------------------
 # Models
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Training / Equipment scan models (Phase 1.5 MVP)
+# -----------------------------------------------------------------------------
+class EquipmentScan(ModelBase):
+    __tablename__ = "equipment_scans"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    image_sha = Column(String(64), nullable=True, index=True)
+    predicted_category = Column(String(50), nullable=True)
+    confidence = Column(Float, nullable=True)
+    alternatives_json = Column(String(500), nullable=True)
+    notes = Column(String(300), nullable=True)
+    corrected_category = Column(String(50), nullable=True)
+
+
+class WorkoutLog(ModelBase):
+    __tablename__ = "workout_logs"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    performed_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    equipment_category = Column(String(50), nullable=False, index=True)
+    exercise_name = Column(String(120), nullable=True)
+    sets = Column(Integer, nullable=True)
+    reps = Column(Integer, nullable=True)
+    weight = Column(Float, nullable=True)
+    notes = Column(String(300), nullable=True)
+
+
 class User(ModelBase):
     __tablename__ = "users"
 
