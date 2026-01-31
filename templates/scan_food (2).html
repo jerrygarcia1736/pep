@@ -1,0 +1,361 @@
+{% extends "base.html" %}
+
+{% block title %}Scan Food - PeptideTracker.ai{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:720px">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <div style="font-size:28px">🎯</div>
+    <div>
+      <h1 class="mb-0">Scan Food</h1>
+      <div class="text-muted small">Take a photo and we'll estimate calories + macros</div>
+    </div>
+  </div>
+
+  <div class="alert alert-info small mb-3">
+    <div class="fw-semibold">📸 Best Results Tips</div>
+    <ul class="mb-0 small">
+      <li><strong>Fill the frame</strong> - Get close to the food</li>
+      <li><strong>Good lighting</strong> - Natural light or bright room</li>
+      <li><strong>Clear view</strong> - Avoid shadows, angles, or obstructions</li>
+      <li><strong>One item</strong> - For mixed plates, scan items separately</li>
+    </ul>
+  </div>
+
+  <div class="card shadow-sm border-0 mb-3">
+    <div class="card-body">
+      <!-- Hidden inputs for camera/file -->
+      <input id="food_camera" type="file" accept="image/*" capture="environment" style="display:none" />
+      <input id="food_upload" type="file" accept="image/*" style="display:none" />
+
+      <!-- Preview Area -->
+      <div id="previewWrap" class="ratio ratio-1x1 bg-dark rounded d-flex align-items-center justify-content-center" style="overflow:hidden">
+        <img id="previewImg" alt="Food preview" style="display:none; width:100%; height:100%; object-fit:cover" />
+        <div id="previewPlaceholder" class="text-center text-white-50">
+          <div style="font-size:46px">📷</div>
+          <div class="small">Your photo will appear here</div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="d-flex gap-2 mt-3">
+        <button id="btnTake" class="btn btn-success flex-fill">
+          <i class="bi bi-camera"></i> Take Photo
+        </button>
+        <button id="btnUpload" class="btn btn-outline-primary flex-fill">
+          <i class="bi bi-upload"></i> Upload Photo
+        </button>
+        <button id="btnRetake" class="btn btn-outline-secondary" style="display:none">
+          <i class="bi bi-arrow-clockwise"></i> Retake
+        </button>
+      </div>
+
+      <!-- Status Messages -->
+      <div id="status" class="mt-3" style="display:none">
+        <div class="d-flex align-items-center gap-2">
+          <div class="spinner-border spinner-border-sm" role="status"></div>
+          <div class="fw-semibold">Analyzing food...</div>
+        </div>
+      </div>
+
+      <!-- Results Area -->
+      <div id="result" class="mt-3" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- Tips Card -->
+  <div class="card border-0 shadow-sm">
+    <div class="card-body">
+      <div class="fw-semibold mb-2">
+        <i class="bi bi-lightbulb"></i> Common Issues & Solutions
+      </div>
+      <ul class="mb-0 small">
+        <li><strong>Food not detected?</strong> Try getting closer or better lighting</li>
+        <li><strong>Wrong food identified?</strong> You can edit all values after scanning</li>
+        <li><strong>Mixed plate?</strong> Scan each item separately for accuracy</li>
+        <li><strong>Packaged food?</strong> Try scanning the nutrition label directly</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // Utility functions
+  const escapeHtml = (s) => String(s ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+  const escapeAttr = (s) => escapeHtml(s).replace(/`/g,'&#96;');
+  
+  // DOM elements
+  const cameraInput = document.getElementById('food_camera');
+  const uploadInput = document.getElementById('food_upload');
+  const btnTake = document.getElementById('btnTake');
+  const btnUpload = document.getElementById('btnUpload');
+  const btnRetake = document.getElementById('btnRetake');
+  const previewImg = document.getElementById('previewImg');
+  const previewPlaceholder = document.getElementById('previewPlaceholder');
+  const status = document.getElementById('status');
+  const result = document.getElementById('result');
+
+  function setBusy(isBusy) {
+    btnTake.disabled = isBusy;
+    btnUpload.disabled = isBusy;
+    btnRetake.disabled = isBusy;
+    status.style.display = isBusy ? 'block' : 'none';
+    if (!isBusy) {
+      btnRetake.style.display = 'inline-block';
+    }
+  }
+
+  function showPreview(file) {
+    const url = URL.createObjectURL(file);
+    previewImg.src = url;
+    previewImg.style.display = 'block';
+    previewPlaceholder.style.display = 'none';
+    btnRetake.style.display = 'inline-block';
+  }
+
+  function resetPreview() {
+    previewImg.style.display = 'none';
+    previewPlaceholder.style.display = 'block';
+    btnRetake.style.display = 'none';
+    result.style.display = 'none';
+    result.innerHTML = '';
+  }
+
+  function renderResult(data) {
+    const macros = data.macros || {};
+    const foodName = data.food_name || 'Unknown Food';
+    const calories = macros.calories ?? 0;
+    const protein = macros.protein ?? 0;
+    const carbs = macros.carbs ?? 0;
+    const fat = macros.fat ?? 0;
+    const fiber = macros.fiber ?? 0;
+    const logId = data.food_log_id;
+
+    const html = `
+      <div class="alert alert-success d-flex align-items-center gap-2 mb-3">
+        <i class="bi bi-check-circle"></i>
+        <div class="flex-grow-1">
+          <strong>Detected:</strong> ${escapeHtml(foodName)}
+        </div>
+        <span class="badge bg-primary">${escapeHtml(macros.source || 'USDA')}</span>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-6 col-md-3">
+          <div class="card text-center bg-light">
+            <div class="card-body py-3">
+              <div class="text-muted small mb-1">Calories</div>
+              <div class="fs-3 fw-bold text-primary">${Number(calories).toFixed(0)}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card text-center bg-light">
+            <div class="card-body py-3">
+              <div class="text-muted small mb-1">Protein</div>
+              <div class="fs-3 fw-bold text-success">${Number(protein).toFixed(1)}g</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card text-center bg-light">
+            <div class="card-body py-3">
+              <div class="text-muted small mb-1">Carbs</div>
+              <div class="fs-3 fw-bold text-warning">${Number(carbs).toFixed(1)}g</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="card text-center bg-light">
+            <div class="card-body py-3">
+              <div class="text-muted small mb-1">Fat</div>
+              <div class="fs-3 fw-bold text-danger">${Number(fat).toFixed(1)}g</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      ${logId ? '<div class="alert alert-success small"><i class="bi bi-check-circle"></i> Saved to your dashboard</div>' : ''}
+
+      <!-- Edit Section -->
+      <div class="card">
+        <div class="card-header bg-light">
+          <strong>Need to Adjust?</strong>
+          <small class="text-muted">You can edit any values below</small>
+        </div>
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-12">
+              <label class="form-label small fw-semibold">Food Name</label>
+              <input id="edit_food_name" class="form-control" value="${escapeAttr(foodName)}" />
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Calories</label>
+              <input id="edit_calories" type="number" step="1" class="form-control" value="${escapeAttr(calories)}" />
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Protein (g)</label>
+              <input id="edit_protein" type="number" step="0.1" class="form-control" value="${escapeAttr(protein)}" />
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Carbs (g)</label>
+              <input id="edit_carbs" type="number" step="0.1" class="form-control" value="${escapeAttr(carbs)}" />
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Fat (g)</label>
+              <input id="edit_fat" type="number" step="0.1" class="form-control" value="${escapeAttr(fat)}" />
+            </div>
+          </div>
+
+          <div class="d-flex align-items-center gap-2 mt-3">
+            <button id="btn_save_edits" class="btn btn-primary">
+              <i class="bi bi-save"></i> Save Edits
+            </button>
+            <span id="edit_status" class="small text-muted"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3 text-center">
+        <a href="/nutrition" class="btn btn-outline-primary">
+          <i class="bi bi-bar-chart"></i> View Today's Nutrition
+        </a>
+      </div>
+    `;
+
+    result.innerHTML = html;
+    result.style.display = 'block';
+
+    // Attach save edits handler
+    const btnSaveEdits = document.getElementById('btn_save_edits');
+    if (btnSaveEdits && logId) {
+      btnSaveEdits.addEventListener('click', async () => {
+        btnSaveEdits.disabled = true;
+        const editStatus = document.getElementById('edit_status');
+        editStatus.textContent = 'Saving...';
+        
+        try {
+          const payload = {
+            food_name: document.getElementById('edit_food_name').value,
+            calories: parseFloat(document.getElementById('edit_calories').value) || 0,
+            protein: parseFloat(document.getElementById('edit_protein').value) || 0,
+            carbs: parseFloat(document.getElementById('edit_carbs').value) || 0,
+            fat: parseFloat(document.getElementById('edit_fat').value) || 0,
+            source: 'manual_edit'
+          };
+          
+          const resp = await fetch(`/api/food-log/${logId}/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          
+          const text = await resp.text();
+          let jsonData = null;
+          try { jsonData = JSON.parse(text); } catch (e) {}
+          
+          if (!resp.ok) {
+            throw new Error(jsonData?.error || text || 'Failed to save');
+          }
+          
+          editStatus.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Saved!</span>';
+          setTimeout(() => { editStatus.textContent = ''; }, 3000);
+        } catch (e) {
+          editStatus.innerHTML = `<span class="text-danger">${escapeHtml(e?.message || String(e))}</span>`;
+        } finally {
+          btnSaveEdits.disabled = false;
+        }
+      });
+    }
+  }
+
+  async function analyze(file) {
+    setBusy(true);
+    result.style.display = 'none';
+
+    try {
+      showPreview(file);
+      
+      const fd = new FormData();
+      fd.append('photo', file, file.name || 'food.jpg');
+
+      const resp = await fetch('{{ url_for("api_food_photo_identify") }}?autosave=1', { 
+        method: 'POST', 
+        body: fd 
+      });
+      
+      const text = await resp.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch (e) {}
+
+      if (!resp.ok || data?.ok === false) {
+        const msg = data?.error || `Detection failed (${resp.status})`;
+        throw new Error(msg);
+      }
+
+      if (!data || !data.food_name) {
+        throw new Error('No food detected. Try a clearer photo or better lighting.');
+      }
+
+      renderResult(data);
+    } catch (err) {
+      console.error('Food scan error:', err);
+      
+      // Show user-friendly error
+      result.innerHTML = `
+        <div class="alert alert-danger">
+          <strong><i class="bi bi-exclamation-triangle"></i> Detection Failed</strong>
+          <p class="mb-0 small mt-2">${escapeHtml(err?.message || 'Unable to analyze food')}</p>
+          <p class="mb-0 small mt-2">
+            <strong>Try:</strong> Better lighting, closer photo, or clearer view of food
+          </p>
+        </div>
+      `;
+      result.style.display = 'block';
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Event listeners
+  btnTake.addEventListener('click', (e) => {
+    e.preventDefault();
+    cameraInput.value = '';
+    cameraInput.click();
+  });
+
+  btnUpload.addEventListener('click', (e) => {
+    e.preventDefault();
+    uploadInput.value = '';
+    uploadInput.click();
+  });
+
+  btnRetake.addEventListener('click', (e) => {
+    e.preventDefault();
+    resetPreview();
+    cameraInput.value = '';
+    uploadInput.value = '';
+  });
+
+  cameraInput.addEventListener('change', () => {
+    const file = cameraInput.files && cameraInput.files[0];
+    if (file) {
+      console.log('Camera file selected:', file.name, file.size, 'bytes');
+      analyze(file);
+    }
+  });
+
+  uploadInput.addEventListener('change', () => {
+    const file = uploadInput.files && uploadInput.files[0];
+    if (file) {
+      console.log('Upload file selected:', file.name, file.size, 'bytes');
+      analyze(file);
+    }
+  });
+
+  // Log when page loads
+  console.log('Scan Food page loaded successfully');
+})();
+</script>
+{% endblock %}
