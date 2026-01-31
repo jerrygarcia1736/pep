@@ -12,20 +12,13 @@ from __future__ import annotations
 import os
 import json
 import requests
-import base64
-
 import secrets
 from datetime import datetime, timedelta
 from functools import wraps
-from werkzeug.utils import secure_filename
-try:
-    from PIL import Image
-except ImportError:
-    Image = None
-import io
 from typing import Any, Dict, List, Tuple
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, render_template_string, make_response
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, render_template_string
+import base64
 from werkzeug.security import generate_password_hash, check_password_hash
 from jinja2 import TemplateNotFound
 
@@ -35,150 +28,112 @@ from models import get_session, create_engine, Base as ModelBase
 
 # Import nutrition API
 from nutrition_api import register_nutrition_routes
+from confidence import compute_injection_confidence
+
+
+def _openai_identify_food_from_image(image_b64: str, mime_type: str = "image/jpeg") -> dict:
+    """Identify a food item from an image using the OpenAI Responses API.
+
+    Returns dict: {name, confidence, alternatives, notes}
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not set"}
+
+    # Use a vision-capable model available on the Responses API.
+    model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4.1-mini")
+
+    data_url = f"data:{mime_type};base64,{image_b64}"
+
+    prompt = (
+        "You are a food recognition assistant. "
+        "Identify the most likely food in the image. "
+        "Return STRICT JSON with keys: "
+        "name (string), confidence (number 0-1), alternatives (array of strings), "
+        "and notes (short string). "
+        "If multiple foods are present, pick the primary one and mention others in notes. "
+        "No markdown, no extra text."
+    )
+
+    payload = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_image", "image_url": data_url}
+                ],
+            }
+        ],
+    }
+
+    r = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=45,
+    )
+    if r.status_code >= 400:
+        return {"error": f"OpenAI API error {r.status_code}", "details": r.text[:2000]}
+
+    resp = r.json()
+    # Responses API commonly provides output_text convenience in some SDKs; raw JSON has output items.
+    # We'll extract text from output content parts.
+    text_parts = []
+    for item in resp.get("output", []) or []:
+        for c in item.get("content", []) or []:
+            if c.get("type") in ("output_text", "text"):
+                text_parts.append(c.get("text", ""))
+    out_text = "\n".join([t for t in text_parts if t]).strip()
+
+    if not out_text:
+        # fallback: some responses may include 'output_text' at top-level in docs examples
+        out_text = (resp.get("output_text") or "").strip()
+
+    if not out_text:
+        return {"error": "No text returned from model"}
+
+    # Parse JSON safely
+    try:
+        return json.loads(out_text)
+    except Exception:
+        # try to locate a JSON object in the text
+        m = re.search(r"\{.*\}", out_text, flags=re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+        return {"error": "Model returned non-JSON", "raw": out_text[:2000]}
 
 # -----------------------------------------------------------------------------
 # Flask app
 # -----------------------------------------------------------------------------
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
-# Session configuration for mobile support
-app.config["SESSION_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # Better mobile compatibility
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)  # Keep users logged in
-# -----------------------------------------------------------------------------
-# Food scanning configuration (used by /scan-food and /api/* endpoints)
-# -----------------------------------------------------------------------------
-UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "uploads")
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
-MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# ----------------------------
+# Helpers
+# ----------------------------
+def has_endpoint(name: str) -> bool:
+    """Return True if a Flask endpoint exists.
 
-USDA_API_KEY = os.environ.get("USDA_API_KEY")
-CALORIENINJAS_API_KEY = os.environ.get("CALORIENINJAS_API_KEY")
-
-def allowed_file(filename: str) -> bool:
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-
-# -----------------------------------------------------------------------------
-# USDA FoodData Central API helper
-# -----------------------------------------------------------------------------
-def search_usda_food(query: str, page_size: int = 5) -> dict:
-    if not USDA_API_KEY:
-        return {"error": "USDA API key not configured"}
+    NOTE: This must be module-level so it can be used both in templates (via context processor)
+    and inside route functions (e.g., scan_nutrition)."""
     try:
-        url = "https://api.nal.usda.gov/fdc/v1/foods/search"
-        params = {
-            "api_key": USDA_API_KEY,
-            "query": query,
-            "pageSize": page_size,
-            "dataType": ["Foundation", "SR Legacy"],
-        }
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code != 200:
-            return {"error": f"USDA API error: {resp.status_code}"}
-        data = resp.json()
-        foods = data.get("foods", []) or []
-        results = []
-        for food in foods:
-            nutrients = {n.get("nutrientName"): n.get("value", 0) for n in food.get("foodNutrients", [])}
-            results.append({
-                "description": food.get("description", "Unknown"),
-                "fdcId": food.get("fdcId"),
-                "calories": nutrients.get("Energy", 0),
-                "protein": nutrients.get("Protein", 0),
-                "carbs": nutrients.get("Carbohydrate, by difference", 0),
-                "fat": nutrients.get("Total lipid (fat)", 0),
-                "fiber": nutrients.get("Fiber, total dietary", 0),
-                "sugar": nutrients.get("Sugars, total including NLEA", 0),
-                "serving_size": "100g",
-                "data_type": food.get("dataType", "Unknown"),
-            })
-        return {"foods": results, "total": data.get("totalHits", 0)}
-    except requests.exceptions.Timeout:
-        return {"error": "USDA API timeout"}
-    except Exception as e:
-        return {"error": f"USDA API error: {str(e)}"}
+        return name in app.view_functions
+    except Exception:
+        return False
 
-def search_calorieninjas_food(query: str) -> dict:
-    if not CALORIENINJAS_API_KEY:
-        return {"error": "CalorieNinjas API key not configured"}
-    try:
-        url = "https://api.calorieninjas.com/v1/nutrition"
-        params = {"query": query}
-        headers = {"X-Api-Key": CALORIENINJAS_API_KEY}
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        if resp.status_code != 200:
-            return {"error": f"CalorieNinjas API error: {resp.status_code}"}
-        data = resp.json()
-        items = data.get("items", []) or []
-        results = []
-        for item in items:
-            results.append({
-                "description": item.get("name", ""),
-                "calories": item.get("calories", 0),
-                "protein": item.get("protein_g", 0),
-                "carbs": item.get("carbohydrates_total_g", 0),
-                "fat": item.get("fat_total_g", 0),
-                "fiber": item.get("fiber_g", 0),
-                "sugar": item.get("sugar_g", 0),
-                "serving_size": f"{item.get('serving_size_g', 100)}g",
-            })
-        return {"foods": results, "total": len(results)}
-    except Exception as e:
-        return {"error": str(e)}
 
-# -----------------------------------------------------------------------------
-# OpenAI Vision helper for food detection
-# -----------------------------------------------------------------------------
-def _openai_identify_food_from_image(image_b64: str) -> dict:
-    """Return {name, confidence (0-1), alternatives[], notes}."""
-    if not OPENAI_API_KEY:
-        return {"error": "Missing OPENAI_API_KEY"}
+def register_route(rule: str, endpoint: str, view_func, **options):
+    """Idempotent route registration to prevent duplicate endpoint crashes."""
+    if endpoint in app.view_functions:
+        return
+    app.add_url_rule(rule, endpoint=endpoint, view_func=view_func, **options)
 
-    # Use a vision-capable model; reuse OPENAI_MODEL default in your app (gpt-4o-mini)
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    # Data URL format
-    data_url = f"data:image/jpeg;base64,{image_b64}"
 
-    sys = (
-        "You are a food recognition assistant. "
-        "Identify the primary food item in the image. "
-        "Return STRICT JSON only with keys: name (string), confidence (number 0-1), alternatives (array of strings), notes (string). "
-        "If multiple foods, choose the main one and list others in alternatives. "
-        "Be concise."
-    )
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": [
-            {"role": "system", "content": sys},
-            {"role": "user", "content": [
-                {"type": "text", "text": "What food is in this image? Return JSON only."},
-                {"type": "image_url", "image_url": {"url": data_url}},
-            ]},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 250,
-    }
-
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=25)
-        if r.status_code != 200:
-            return {"error": f"OpenAI error: {r.status_code}", "details": r.text[:300]}
-        out = r.json()
-        content = out["choices"][0]["message"]["content"].strip()
-        # Parse JSON safely; sometimes wrapped in ```json
-        content = re.sub(r"^```json\s*|```$", "", content).strip()
-        return json.loads(content)
-    except Exception as e:
-        return {"error": str(e)}
 
 # Jinja filter for parsing JSON in templates
 @app.template_filter('from_json')
@@ -323,10 +278,30 @@ def tier_at_least(tier: str, minimum: str) -> bool:
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        # Auth only. Onboarding/profile are optional and must never block core features.
         if "user_id" not in session:
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
+
+        # ---------------------------------------------------------------------
+        # Profile is OPTIONAL.
+        # We only gate a small set of "personalized / higher-risk" features (Pep AI),
+        # while allowing the rest of the app (including scanners) to work normally.
+        #
+        # If the user clicks "Skip for now", we set session["profile_skipped"]=True
+        # and we should respect that for the rest of the session.
+        # ---------------------------------------------------------------------
+        restricted_until_profile_complete = {"chat", "api_chat", "pep_ai"}
+
+        if (f.__name__ in restricted_until_profile_complete) and (not session.get("profile_skipped")):
+            db = get_session(db_url)
+            try:
+                profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
+                if not profile or not profile.completed_at:
+                    flash("Complete your (optional) profile to unlock Pep AI.", "info")
+                    return redirect(url_for("dashboard"))
+            finally:
+                db.close()
+
         return f(*args, **kwargs)
     return wrapper
 
@@ -364,13 +339,16 @@ def has_accepted_disclaimer(user_id: int) -> bool:
         db.close()
 
 def require_onboarding(view_func):
-    """No-op decorator - onboarding is now completely optional"""
+    """Lightweight gate: requires login, but does NOT force onboarding redirects.
+
+    Profile + disclaimer are optional and can be completed later.
+    Individual features can check profile/disclaimer as needed.
+    """
     @wraps(view_func)
     def wrapper(*args, **kwargs):
-        # Just verify user is logged in
-        if "user_id" not in session:
+        u = get_current_user()
+        if not u:
             return redirect(url_for("login"))
-        # No onboarding checks - let users access everything
         return view_func(*args, **kwargs)
     return wrapper
 
@@ -449,23 +427,11 @@ def _compute_dashboard_context() -> Tuple[Dict[str, Any], List[Any], List[Any]]:
     # Best-effort: use your project's DB helper if present; otherwise defaults
     try:
         from database import PeptideDB  # type: ignore
-        from sqlalchemy.orm import joinedload  # Import for eager loading
 
         db = get_session(db_url)
         try:
             pdb = PeptideDB(db)
-            
-            # EAGERLY LOAD peptide relationship to prevent DetachedInstanceError
-            # This loads protocol.peptide while session is still open
-            try:
-                protocols = getattr(pdb, "list_active_protocols", lambda: [])()
-                # Force load peptide relationships before session closes
-                for p in protocols:
-                    if hasattr(p, 'peptide') and p.peptide:
-                        _ = p.peptide.name  # Access to force load
-            except:
-                protocols = []
-            
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
             recent_injections = getattr(pdb, "get_recent_injections", lambda days=7: [])(days=7)
             active_vials = getattr(pdb, "list_active_vials", lambda: [])()
             all_peptides = getattr(pdb, "list_peptides", lambda: [])()
@@ -598,343 +564,813 @@ PROTOCOL_TEMPLATES: dict[str, dict[str, str]] = {
 # - Scan Peptides: OCR text -> match to known peptides
 # -----------------------------------------------------------------------------
 
+@app.route("/scan-food-photo", methods=["GET"])
+@login_required
+def scan_food_photo():
+    # Photo-of-food recognition (no label). Uses OpenAI vision + quick portion prompt.
+    html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Photo of Food</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    h1{font-size:20px;margin:0 0 6px;}
+    .muted{color:#666;font-size:13px;line-height:1.4}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:800; cursor:pointer;}
+    .btn.secondary{background:#fff;color:#111827;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    input[type=file]{width:100%;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
+    img{max-width:100%; border-radius:12px; border:1px solid #e6e6ef; margin-top:10px;}
+    select,input{width:100%; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .pill{display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; font-size:12px; color:#111827;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📸 Photo of Food</h1>
+    <div class="muted">Snap a photo (e.g., an apple). We’ll identify it, then you pick a portion size.</div>
+
+    <div class="box">
+      <div class="muted"><b>Accuracy tips:</b> good light, food centered, avoid motion blur, fill the frame.</div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <input id="foodPhoto" type="file" accept="image/*" capture="environment" style="display:none" />
+      <input id="foodUpload" type="file" accept="image/*" style="display:none" />
+      <div class="d-flex gap-2 mt-2">
+        <button id="btnStartCam" type="button" class="btn btn-success flex-fill">
+          <i class="bi bi-camera"></i> Start Camera
+        </button>
+        <button id="btnUpload" type="button" class="btn btn-outline-primary flex-fill">
+          <i class="bi bi-upload"></i> Upload Photo
+        </button>
+      </div>
+      <img id="preview" style="display:none;" alt="preview"/>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="btnIdentify" type="button" disabled>✨ Identify</button>
+      <a class="btn secondary" href="/scan-food">🏷️ Scan Label</a>
+    </div>
+
+    <div style="margin-top:10px;">
+      <span class="pill" id="status">Waiting for photo…</span>
+    </div>
+
+    <div id="resultBox" style="display:none; margin-top:12px;">
+      <div class="box">
+        <div class="muted"><b>Detected:</b> <span id="foodName"></span> <span class="muted" id="conf"></span></div>
+        <div class="muted" id="alts" style="margin-top:6px;"></div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <label class="muted">Portion</label>
+        <select id="portion">
+          <option value="1 small">1 small</option>
+          <option value="1 medium" selected>1 medium</option>
+          <option value="1 large">1 large</option>
+          <option value="100 g">100 g</option>
+          <option value="200 g">200 g</option>
+        </select>
+      </div>
+
+      <form id="logFoodForm" method="post" action="/log-food" style="margin-top:10px;">
+        <input type="hidden" name="food_description" id="food_description" value="">
+        <button class="btn" type="submit">➕ Log Food</button>
+        <div class="muted" style="margin-top:8px;">We’ll prefill your log with the identified food + portion.</div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const foodPhoto = document.getElementById("foodPhoto");      // camera capture (native)
+    const foodUpload = document.getElementById("foodUpload");    // library upload
+    const btnStartCam = document.getElementById("btnStartCam");
+    const btnUpload = document.getElementById("btnUpload");
+
+    const btnIdentify = document.getElementById("btnIdentify");
+    const preview = document.getElementById("preview");
+    const status = document.getElementById("status");
+
+    const resultBox = document.getElementById("resultBox");
+    const foodName = document.getElementById("foodName");
+    const conf = document.getElementById("conf");
+    const alts = document.getElementById("alts");
+    const portion = document.getElementById("portion");
+    const food_description = document.getElementById("food_description");
+    const logFoodForm = document.getElementById("logFoodForm");
+
+    let lastResult = null;
+
+    function setStatus(t){ status.textContent = t; }
+
+    btnStartCam.addEventListener("click", () => {
+      // must be a user gesture for iOS; button click is perfect
+      foodPhoto.value = "";
+      foodPhoto.click();
+    });
+
+    btnUpload.addEventListener("click", () => {
+      foodUpload.value = "";
+      foodUpload.click();
+    });
+
+    function handleSelectedFile(file){
+      lastResult = null;
+      resultBox.style.display = "none";
+      if (!file){
+        preview.src = "";
+        preview.style.display = "none";
+        btnIdentify.disabled = true;
+        return;
+      }
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = "block";
+      btnIdentify.disabled = false;
+    }
+
+    foodPhoto.addEventListener("change", () => handleSelectedFile(foodPhoto.files && foodPhoto.files[0]));
+    foodUpload.addEventListener("change", () => handleSelectedFile(foodUpload.files && foodUpload.files[0]));
+
+    btnIdentify.addEventListener("click", async () => {
+      const file = (foodPhoto.files && foodPhoto.files[0]) || (foodUpload.files && foodUpload.files[0]);
+      if (!file) return;
+
+      btnIdentify.disabled = true;
+      setStatus("Identifying…");
+
+      try{
+        const fd = new FormData();
+        fd.append("photo", file);
+
+        const r = await fetch("/api/food-photo-identify", {
+          method: "POST",
+          body: fd
+        });
+
+        const j = await r.json();
+        if (!r.ok || j.error){
+          console.error(j);
+          alert("Identify failed: " + (j.error || "unknown"));
+          setStatus("Identify failed.");
+          return;
+        }
+        lastResult = j;
+        foodName.textContent = j.name || "Unknown";
+        conf.textContent = (typeof j.confidence === "number") ? ` (confidence ${(j.confidence*100).toFixed(0)}%)` : "";
+        alts.textContent = (j.alternatives && j.alternatives.length) ? ("Alternatives: " + j.alternatives.join(", ")) : "";
+        resultBox.style.display = "block";
+        setStatus("Review and log.");
+      }catch(e){
+        console.error(e);
+        alert("Identify failed. Try again.");
+        setStatus("Identify failed.");
+      }finally{
+        btnIdentify.disabled = false;
+      }
+    });
+
+    logFoodForm.addEventListener("submit", () => {
+      const name = (lastResult && lastResult.name) ? lastResult.name : "food";
+      const p = portion.value || "1 serving";
+      food_description.value = `${name} — ${p}`;
+    });
+  </script>
+</body>
+</html>"""
+    return render_template_string(html)
 
 
+@app.route("/api/food-photo-identify", methods=["POST"])
+@login_required
+def api_food_photo_identify():
+    if "photo" not in request.files:
+        return jsonify({"error": "No photo uploaded"}), 400
 
-# -----------------------------------------------------------------------------
-# NEW: Camera Food Scanner with Instant Nutrition
-# -----------------------------------------------------------------------------
+    f = request.files["photo"]
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    data = f.read()
+    if not data:
+        return jsonify({"error": "Empty file"}), 400
+
+    # Basic mime detection
+    mime = f.mimetype or "image/jpeg"
+    img_b64 = base64.b64encode(data).decode("utf-8")
+
+    result = _openai_identify_food_from_image(img_b64, mime_type=mime)
+    status = 200 if "error" not in result else 500
+    return jsonify(result), status
+
 @app.route("/scan-food", methods=["GET"])
 @login_required
 def scan_food():
-    return render_template("scan_food.html", title="Scan Food")
+    # Posts recognized food directly into /log-food via form POST (no template changes needed)
+    html = """<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scan Food</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    h1{font-size:20px;margin:0 0 6px;}
+    .muted{color:#666;font-size:13px;line-height:1.4}
+    .tabs{display:flex; gap:8px; margin:14px 0;}
+    .tab{flex:1; padding:10px 12px; border-radius:12px; border:1px solid #e6e6ef; background:#fafafe; cursor:pointer; font-weight:600;}
+    .tab.active{background:#eef2ff; border-color:#c7d2fe;}
+    .panel{display:none; margin-top:10px;}
+    .panel.active{display:block;}
+    input[type=file]{width:100%;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
+    .btn.secondary{background:#fff;color:#111827;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
+    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
+    img{max-width:100%; border-radius:12px; border:1px solid #e6e6ef;}
+    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h1>📸 Scan Food</h1>
+        <div class="muted">Snap a photo of the food for a best-guess label, or use OCR for receipts/labels. You’ll confirm before logging.</div>
+      </div>
+      <div class="toplinks">
+        <a class="linkbtn" href="/nutrition">🍎 Nutrition</a>
+        <a class="linkbtn" href="/pep-ai">🤖 Pep AI</a>
+      </div>
+    </div>
 
-@app.route("/api/scan-food-image", methods=["POST"])
-@login_required
-def api_scan_food_image():
-    if "image" not in request.files:
-        return jsonify({"error": "No image provided"}), 400
+    <div class="tabs">
+      <button class="tab active" id="tab-photo" type="button">Photo (AI Guess)</button>
+      <button class="tab" id="tab-ocr" type="button">Text (OCR)</button>
+    </div>
 
-    file = request.files["image"]
-    if not file or file.filename == "":
-        return jsonify({"error": "No selected file"}), 400
+    <div class="panel active" id="panel-photo">
+      <div class="box"><div class="muted"><b>Tip:</b> Fill the frame with the food. Good lighting helps.</div></div>
+      <div style="margin-top:10px;">
+        <input id="foodPhoto" type="file" accept="image/*" capture="environment" capture="environment" />
+      
+          <div class="mt-3">
+            <div class="d-flex flex-wrap gap-2">
+              <button type="button" class="btn btn-outline-primary" id="openFoodCameraBtn">
+                <i class="bi bi-camera"></i> Use Camera
+              </button>
+              <button type="button" class="btn btn-outline-secondary d-none" id="captureFoodFrameBtn">
+                <i class="bi bi-circle-fill"></i> Capture Photo
+              </button>
+              <button type="button" class="btn btn-outline-danger d-none" id="stopFoodCameraBtn">
+                <i class="bi bi-x-circle"></i> Stop
+              </button>
+            </div>
 
-    if not allowed_file(file.filename):
-        return jsonify({"error": "Invalid file type. Use JPG, PNG, or WEBP"}), 400
+            <div class="mt-3 d-none" id="foodCameraWrap">
+              <video id="foodCameraStream" playsinline autoplay class="w-100 rounded border"></video>
+              <canvas id="foodCameraCanvas" class="d-none"></canvas>
+            </div>
+          </div>
+</div>
+      <div id="photoPreview" style="margin-top:10px; display:none;">
+        <img id="previewImg" />
+      </div>
 
-    try:
-        image_data = file.read()
-        if len(image_data) > MAX_IMAGE_SIZE:
-            return jsonify({"error": "Image too large (max 10MB)"}), 400
+      <div class="row">
+        <button class="btn" id="btnGuess" type="button" disabled>🤖 Guess Food</button>
+        <button class="btn secondary" id="btnClear" type="button" disabled>Clear</button>
+      </div>
 
-        # Basic image validation if Pillow is available
-        if Image is not None:
-            try:
-                img = Image.open(io.BytesIO(image_data))
-                img.verify()
-            except Exception:
-                return jsonify({"error": "Invalid image file"}), 400
+      <div id="guessBox" class="box" style="display:none;">
+        <div class="muted" style="margin-bottom:6px;"><b>Tap a guess to log:</b></div>
+        <div id="guessChips" class="row"></div>
+      </div>
+    </div>
 
-        image_b64 = base64.b64encode(image_data).decode("utf-8")
+    <div class="panel" id="panel-ocr">
+      <div class="box"><div class="muted"><b>Use OCR</b> for receipts, labels, or written notes (e.g., “apple, 1 medium”).</div></div>
+      <div style="margin-top:10px;">
+        <input id="ocrPhoto" type="file" accept="image/*" capture="environment" />
+      </div>
+      <div class="row">
+        <button class="btn" id="btnOcr" type="button" disabled>🔎 Extract Text</button>
+      </div>
+      <div style="margin-top:10px;">
+        <textarea id="ocrText" placeholder="OCR text will appear here..."></textarea>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnLogOcr" type="button" disabled>✅ Log This Text</button>
+      </div>
+    </div>
 
-        food_detection = _openai_identify_food_from_image(image_b64)
-        if "error" in food_detection:
-            return jsonify({"error": "Food detection failed", "details": food_detection.get("error")}), 500
+    <form id="logFoodForm" method="post" action="/log-food" style="display:none;">
+      <input type="hidden" name="food_description" id="food_description" value="" />
+    </form>
+  </div>
 
-        detected_food_name = (food_detection.get("name") or "").strip()
-        confidence = float(food_detection.get("confidence") or 0)
-        alternatives = food_detection.get("alternatives") or []
-        notes = food_detection.get("notes") or ""
+  <!-- TFJS + MobileNet (open source, browser-side) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js">
+      // --- Mobile camera support (direct capture) ---
+      let cameraStream = null;
 
-        if not detected_food_name:
-            return jsonify({"error": "Could not identify food in image"}), 400
+      async function startCamera() {
+        const wrap = document.getElementById('cameraWrap');
+        const video = document.getElementById('cameraStream');
+        const openBtn = document.getElementById('openCameraBtn');
+        const capBtn = document.getElementById('captureFrameBtn');
+        const stopBtn = document.getElementById('stopCameraBtn');
 
-        usda_results = search_usda_food(detected_food_name, page_size=3)
-        ninja_results = search_calorieninjas_food(detected_food_name)
+        try {
+          cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false
+          });
+          video.srcObject = cameraStream;
+          wrap.classList.remove('d-none');
+          capBtn.classList.remove('d-none');
+          stopBtn.classList.remove('d-none');
+          openBtn.classList.add('d-none');
+        } catch (e) {
+          console.error(e);
+          alert("Could not access camera. You can still use the Upload Photo option.");
+        }
+      }
 
-        all_foods = []
-        if "foods" in usda_results:
-            for food in usda_results["foods"]:
-                food["source"] = "USDA"
-                all_foods.append(food)
-        if "foods" in ninja_results:
-            for food in ninja_results["foods"]:
-                food["source"] = "CalorieNinjas"
-                all_foods.append(food)
+      function stopCamera() {
+        const wrap = document.getElementById('cameraWrap');
+        const openBtn = document.getElementById('openCameraBtn');
+        const capBtn = document.getElementById('captureFrameBtn');
+        const stopBtn = document.getElementById('stopCameraBtn');
+        const video = document.getElementById('cameraStream');
 
-        if not all_foods:
-            return jsonify({
-                "error": "No nutrition data found",
-                "detected_food": detected_food_name,
-                "confidence": confidence,
-                "alternatives": alternatives,
-            }), 404
+        if (cameraStream) {
+          cameraStream.getTracks().forEach(t => t.stop());
+          cameraStream = null;
+        }
+        video.srcObject = null;
+        wrap.classList.add('d-none');
+        capBtn.classList.add('d-none');
+        stopBtn.classList.add('d-none');
+        openBtn.classList.remove('d-none');
+      }
 
-        return jsonify({
-            "success": True,
-            "detected_food": detected_food_name,
-            "confidence": confidence,
-            "alternatives": alternatives,
-            "notes": notes,
-            "foods": all_foods[:5],
-            "total_results": len(all_foods),
-        })
-    except Exception as e:
-        return jsonify({"error": "Server error processing image", "details": str(e)}), 500
+      function capturePhotoToFileInput() {
+        const video = document.getElementById('cameraStream');
+        const canvas = document.getElementById('cameraCanvas');
+        const input = document.getElementById('peptidePhoto');
 
-@app.route("/api/nutrition-search", methods=["GET"])
-@login_required
-def api_nutrition_search():
-    query = (request.args.get("q") or "").strip()
-    if not query:
-        return jsonify({"error": "No search query provided"}), 400
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
 
-    usda_results = search_usda_food(query, page_size=10)
-    ninja_results = search_calorieninjas_food(query)
+        canvas.toBlob(blob => {
+          if (!blob) return;
+          // Create a File and set it to the file input so existing OCR flow works.
+          const file = new File([blob], "camera.jpg", { type: "image/jpeg" });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
 
-    all_foods = []
-    if "foods" in usda_results:
-        for food in usda_results["foods"]:
-            food["source"] = "USDA"
-            all_foods.append(food)
-    if "foods" in ninja_results:
-        for food in ninja_results["foods"]:
-            food["source"] = "CalorieNinjas"
-            all_foods.append(food)
+          // Trigger the same handler as upload selection.
+          const evt = new Event('change', { bubbles: true });
+          input.dispatchEvent(evt);
 
-    return jsonify({"success": True, "query": query, "foods": all_foods, "total": len(all_foods)})
+          stopCamera();
+        }, "image/jpeg", 0.92);
+      }
+
+      document.getElementById('openCameraBtn')?.addEventListener('click', startCamera);
+      document.getElementById('stopCameraBtn')?.addEventListener('click', stopCamera);
+      document.getElementById('captureFrameBtn')?.addEventListener('click', capturePhotoToFileInput);
+      // Auto-open camera ONLY when arriving via nav click (?autocam=1) and only once per session for this page.
+      window.addEventListener('DOMContentLoaded', () => {
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches;
+        if (!isMobile) return;
+
+        const params = new URLSearchParams(window.location.search);
+        const wantsAuto = params.get('autocam') === '1';
+        if (!wantsAuto) return;
+
+        const key = 'autocam_once:/scan-peptides';
+        if (sessionStorage.getItem(key) === '1') return;
+
+        // Mark as used and remove the query param so refresh/back won't retrigger.
+        sessionStorage.setItem(key, '1');
+        try {
+          params.delete('autocam');
+          const newUrl = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '') + window.location.hash;
+          history.replaceState(null, '', newUrl);
+        } catch (e) {}
+
+        setTimeout(() => { startCamera(); }, 350);
+      });
+// --- Mobile camera support (direct capture) for Food ---
+      let foodCameraStreamObj = null;
+
+      async function startFoodCamera() {
+        const wrap = document.getElementById('foodCameraWrap');
+        const video = document.getElementById('foodCameraStream');
+        const openBtn = document.getElementById('openFoodCameraBtn');
+        const capBtn = document.getElementById('captureFoodFrameBtn');
+        const stopBtn = document.getElementById('stopFoodCameraBtn');
+
+        try {
+          foodCameraStreamObj = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false
+          });
+          video.srcObject = foodCameraStreamObj;
+          wrap.classList.remove('d-none');
+          capBtn.classList.remove('d-none');
+          stopBtn.classList.remove('d-none');
+          openBtn.classList.add('d-none');
+        } catch (e) {
+          console.error(e);
+          alert("Could not access camera. You can still use the Upload Photo option.");
+        }
+      }
+
+      function stopFoodCamera() {
+        const wrap = document.getElementById('foodCameraWrap');
+        const openBtn = document.getElementById('openFoodCameraBtn');
+        const capBtn = document.getElementById('captureFoodFrameBtn');
+        const stopBtn = document.getElementById('stopFoodCameraBtn');
+        const video = document.getElementById('foodCameraStream');
+
+        if (foodCameraStreamObj) {
+          foodCameraStreamObj.getTracks().forEach(t => t.stop());
+          foodCameraStreamObj = null;
+        }
+        video.srcObject = null;
+        wrap.classList.add('d-none');
+        capBtn.classList.add('d-none');
+        stopBtn.classList.add('d-none');
+        openBtn.classList.remove('d-none');
+      }
+
+      function captureFoodPhotoToFileInput() {
+        const video = document.getElementById('foodCameraStream');
+        const canvas = document.getElementById('foodCameraCanvas');
+        const input = document.getElementById('foodPhoto');
+
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+
+        canvas.toBlob(blob => {
+          if (!blob) return;
+          const file = new File([blob], "food_camera.jpg", { type: "image/jpeg" });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+
+          const evt = new Event('change', { bubbles: true });
+          input.dispatchEvent(evt);
+
+          stopFoodCamera();
+        }, "image/jpeg", 0.92);
+      }
+
+      document.getElementById('openFoodCameraBtn')?.addEventListener('click', startFoodCamera);
+      document.getElementById('stopFoodCameraBtn')?.addEventListener('click', stopFoodCamera);
+      document.getElementById('captureFoodFrameBtn')?.addEventListener('click', captureFoodPhotoToFileInput);
+    
+</script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+
+  <!-- Tesseract.js (open source OCR, browser-side) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <script>
+    const tabPhoto = document.getElementById("tab-photo");
+    const tabOcr   = document.getElementById("tab-ocr");
+    const panelPhoto = document.getElementById("panel-photo");
+    const panelOcr   = document.getElementById("panel-ocr");
+
+    function activate(which){
+      const isPhoto = which === "photo";
+      tabPhoto.classList.toggle("active", isPhoto);
+      tabOcr.classList.toggle("active", !isPhoto);
+      panelPhoto.classList.toggle("active", isPhoto);
+      panelOcr.classList.toggle("active", !isPhoto);
+    }
+    tabPhoto.addEventListener("click", () => activate("photo"));
+    tabOcr.addEventListener("click", () => activate("ocr"));
+
+    // ---- Photo (AI Guess) ----
+    const foodPhoto = document.getElementById("foodPhoto");
+    const preview = document.getElementById("photoPreview");
+    const previewImg = document.getElementById("previewImg");
+    const btnGuess = document.getElementById("btnGuess");
+    const btnClear = document.getElementById("btnClear");
+    const guessBox = document.getElementById("guessBox");
+    const guessChips = document.getElementById("guessChips");
+
+    let model = null;
+    let imgEl = null;
+
+    foodPhoto.addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const url = URL.createObjectURL(file);
+      previewImg.src = url;
+      preview.style.display = "block";
+      btnGuess.disabled = false;
+      btnClear.disabled = false;
+      guessBox.style.display = "none";
+      guessChips.innerHTML = "";
+
+      imgEl = new Image();
+      imgEl.src = url;
+      await new Promise(res => imgEl.onload = res);
+    });
+
+    btnClear.addEventListener("click", () => {
+      foodPhoto.value = "";
+      preview.style.display = "none";
+      btnGuess.disabled = true;
+      btnClear.disabled = true;
+      guessBox.style.display = "none";
+      guessChips.innerHTML = "";
+      imgEl = null;
+    });
+
+    function normalizeLabel(label){
+      label = (label || "").toLowerCase();
+      if (label.includes("apple")) return "apple";
+      if (label.includes("banana")) return "banana";
+      if (label.includes("orange")) return "orange";
+      if (label.includes("egg")) return "egg";
+      if (label.includes("pizza")) return "pizza";
+      if (label.includes("hamburger") || label.includes("cheeseburger")) return "hamburger";
+      return label.split(",")[0].split(" ")[0].trim();
+    }
+
+    btnGuess.addEventListener("click", async () => {
+      if (!imgEl) return;
+
+      btnGuess.disabled = true;
+      btnGuess.textContent = "Loading model...";
+      try{
+        if (!model) model = await mobilenet.load();
+        btnGuess.textContent = "Analyzing...";
+        const preds = await model.classify(imgEl);
+
+        guessChips.innerHTML = "";
+        preds.slice(0,5).forEach(p => {
+          const term = normalizeLabel(p.className);
+          const chip = document.createElement("div");
+          chip.className = "chip";
+          chip.textContent = `${term} (${Math.round(p.probability*100)}%)`;
+          chip.addEventListener("click", () => {
+            document.getElementById("food_description").value = term;
+            document.getElementById("logFoodForm").submit();
+          });
+          guessChips.appendChild(chip);
+        });
+
+        guessBox.style.display = "block";
+      }catch(err){
+        alert("Food guess failed. Try again with better lighting and closer framing.");
+      }finally{
+        btnGuess.disabled = false;
+        btnGuess.textContent = "🤖 Guess Food";
+      }
+    });
+
+    // ---- OCR (Text) ----
+    const ocrPhoto = document.getElementById("ocrPhoto");
+    const btnOcr = document.getElementById("btnOcr");
+    const ocrText = document.getElementById("ocrText");
+    const btnLogOcr = document.getElementById("btnLogOcr");
+
+    ocrPhoto.addEventListener("change", () => {
+      const file = ocrPhoto.files && ocrPhoto.files[0];
+      btnOcr.disabled = !file;
+      btnLogOcr.disabled = true;
+      ocrText.value = "";
+    });
+
+    btnOcr.addEventListener("click", async () => {
+      const file = ocrPhoto.files && ocrPhoto.files[0];
+      if (!file) return;
+
+      btnOcr.disabled = true;
+      btnOcr.textContent = "Running OCR...";
+      try{
+        const { data } = await Tesseract.recognize(file, "eng");
+        const text = (data && data.text) ? data.text.trim() : "";
+        ocrText.value = text;
+        btnLogOcr.disabled = text.length < 2;
+      }catch(err){
+        alert("OCR failed. Try again with brighter lighting and closer focus.");
+      }finally{
+        btnOcr.disabled = false;
+        btnOcr.textContent = "🔎 Extract Text";
+      }
+    });
+
+    btnLogOcr.addEventListener("click", () => {
+      const text = (ocrText.value || "").trim();
+      if (!text) return;
+      document.getElementById("food_description").value = text;
+      document.getElementById("logFoodForm").submit();
+    });
+  </script>
+</body>
+</html>"""
+    return render_template_string(html)
 
 
 
 @app.route("/scan-nutrition", methods=["GET"])
 @login_required
 def scan_nutrition():
-    # Alias route used by navbar. Reuse the working Scan Food experience.
-    if request.args.get("autocam") == "1":
-        return redirect(url_for("scan_food") + "?autocam=1")
-    return redirect(url_for("scan_food"))
-
-
+    """
+    Alias route used by the navbar.
+    Should open the native-camera-based food scan (works best on iPhone Safari).
+    """
+    autocam = request.args.get("autocam") == "1"
+    if has_endpoint("scan_food_photo"):
+        url = url_for("scan_food_photo")
+    else:
+        url = "/scan-food-photo"
+    if autocam:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}autocam=1"
+    return redirect(url)
 @app.route("/scan-peptides", methods=["GET"])
 @login_required
 def scan_peptides():
-    # Avoid Jinja rendering here to prevent 500s caused by template parsing issues.
     peptides = _load_peptides_list()
-    peptide_names = [p.get("name", "") for p in peptides if p.get("name")]
-    peptide_names_json = json.dumps(peptide_names)
+    peptide_names = [p.get("name","") for p in peptides if p.get("name")]
 
-    html = f"""<!doctype html>
+    html = """<!doctype html>
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Scan Peptides</title>
   <style>
-    body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}}
-    .card{{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}}
-    h1{{font-size:20px;margin:0 0 6px;}}
-    .muted{{color:#666;font-size:13px;line-height:1.4}}
-    input[type=file]{{width:100%;}}
-    .btn{{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}}
-    .btn:disabled{{opacity:.55;cursor:not-allowed;}}
-    .btn.secondary{{background:#fff;color:#111827;}}
-    .row{{display:flex;gap:10px;flex-wrap:wrap;}}
-    .pill{{display:inline-flex;align-items:center;gap:6px;background:#eef2ff;border:1px solid #dbe3ff;padding:6px 10px;border-radius:999px;font-size:12px;color:#233;}}
-    .out{{white-space:pre-wrap;background:#0b1020;color:#d7e2ff;border-radius:12px;padding:10px;font-size:12px;min-height:64px;}}
-    .label{{font-size:12px;color:#444;margin:10px 0 4px;}}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:16px; background:#f7f7fb;}
+    .card{background:#fff;border:1px solid #e6e6ef;border-radius:14px;padding:14px;box-shadow:0 1px 8px rgba(0,0,0,.04); max-width:720px; margin:0 auto;}
+    h1{font-size:20px;margin:0 0 6px;}
+    .muted{color:#666;font-size:13px;line-height:1.4}
+    input[type=file]{width:100%;}
+    .btn{display:inline-flex;align-items:center;justify-content:center; gap:8px; padding:10px 12px; border-radius:12px; border:1px solid #d9d9e6; background:#111827; color:#fff; font-weight:700; cursor:pointer;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    .box{border:1px dashed #d9d9e6; border-radius:12px; padding:10px; background:#fafafe; margin-top:10px;}
+    textarea{width:100%; min-height:90px; padding:10px; border-radius:12px; border:1px solid #e6e6ef;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;}
+    .chip{padding:8px 10px; border-radius:999px; border:1px solid #e6e6ef; background:#fff; cursor:pointer;}
+    .toplinks{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+    .linkbtn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;border:1px solid #e6e6ef;background:#fff;text-decoration:none;color:#111827;font-weight:700;}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>Scan Peptides</h1>
-    <div class="muted">Take a photo of the kit/box label. We’ll OCR it and suggest the closest peptide name.</div>
-
-    <div class="label">Upload a photo</div>
-    <input id="peptidePhoto" type="file" accept="image/*" capture="environment" />
-
-    <div class="mt-3">
-      <div class="row">
-        <button class="btn secondary" type="button" id="openCameraBtn">📷 Use Camera</button>
-        <button class="btn secondary" type="button" id="captureFrameBtn" style="display:none;">⏺ Capture Photo</button>
-        <button class="btn secondary" type="button" id="stopCameraBtn" style="display:none;">✖ Stop</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h1>📦 Scan Peptides</h1>
+        <div class="muted">Take a photo of the box/kit label (handwritten or printed). We’ll extract text and suggest peptide matches.</div>
       </div>
-      <div id="cameraWrap" style="display:none;margin-top:10px;">
-        <video id="cameraStream" playsinline autoplay style="width:100%;border-radius:12px;border:1px solid #e6e6ef;"></video>
-        <canvas id="cameraCanvas" style="display:none;"></canvas>
+      <div class="toplinks">
+        <a class="linkbtn" href="/add-vial">➕ Add Vial</a>
+        <a class="linkbtn" href="/pep-ai">🤖 Pep AI</a>
       </div>
     </div>
 
-    <div class="label">OCR Result</div>
-    <div class="out" id="ocrOut">Waiting…</div>
+    <div class="box"><div class="muted"><b>Tip:</b> Get close, fill the frame with the writing, and use bright light.</div></div>
 
-    <div class="label">Best Match</div>
-    <div class="pill" id="matchPill">—</div>
+    <div style="margin-top:10px;">
+      <input id="pepPhoto" type="file" accept="image/*" capture="environment" />
+    </div>
 
-    <div class="label">Actions</div>
     <div class="row">
-      <button class="btn" type="button" id="copyBtn" disabled>Copy Result</button>
-      <button class="btn secondary" type="button" onclick="window.location.href='/vials'">Go to Vials</button>
+      <button class="btn" id="btnOcrPep" type="button" disabled>🔎 OCR Label</button>
+    </div>
+
+    <div style="margin-top:10px;">
+      <textarea id="pepText" placeholder="OCR text will appear here..."></textarea>
+    </div>
+
+    <div id="matchBox" class="box" style="display:none;">
+      <div class="muted" style="margin-bottom:6px;"><b>Tap a suggested peptide:</b></div>
+      <div id="matchChips" class="row"></div>
+      <div class="muted" style="margin-top:8px;">This will take you to <b>Add Vial</b> with a reminder to select this peptide.</div>
     </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script>
-    const peptideNames = {peptide_names_json};
+    const peptideNames = {{ peptide_names | tojson }};
+    const pepPhoto = document.getElementById("pepPhoto");
+    const btn = document.getElementById("btnOcrPep");
+    const pepText = document.getElementById("pepText");
+    const matchBox = document.getElementById("matchBox");
+    const matchChips = document.getElementById("matchChips");
 
-    const pepPhoto = document.getElementById("peptidePhoto");
-    const ocrOut = document.getElementById("ocrOut");
-    const matchPill = document.getElementById("matchPill");
-    const copyBtn = document.getElementById("copyBtn");
+    pepPhoto.addEventListener("change", () => {
+      const file = pepPhoto.files && pepPhoto.files[0];
+      btn.disabled = !file;
+      pepText.value = "";
+      matchBox.style.display = "none";
+      matchChips.innerHTML = "";
+    });
 
-    function normalize(s) {{
+    function normalize(s){
       return (s||"").toUpperCase().replace(/[^A-Z0-9\-\s]/g," ").replace(/\s+/g," ").trim();
-    }}
+    }
 
-    function scoreMatch(text, name) {{
+    function scoreMatch(text, name){
       const t = normalize(text);
       const n = normalize(name);
       if (!t || !n) return 0;
       if (t.includes(n)) return 100;
-      const tParts = new Set(t.split(" "));
-      const nParts = new Set(n.split(" "));
-      let hit = 0;
-      nParts.forEach(p => {{ if (tParts.has(p)) hit++; }});
-      return Math.round((hit / Math.max(1, nParts.size)) * 90);
-    }}
+      const tset = new Set(t.split(" "));
+      const nset = new Set(n.split(" "));
+      let overlap = 0;
+      for (const tok of nset){ if (tset.has(tok)) overlap++; }
+      return overlap;
+    }
 
-    function bestMatch(text) {{
-      let best = {{name:"—", score:0}};
-      for (const n of peptideNames) {{
-        const sc = scoreMatch(text, n);
-        if (sc > best.score) best = {{name:n, score:sc}};
-      }}
-      return best;
-    }}
+    function buildSuggestions(text){
+      const scored = peptideNames.map(n => ({name:n, score: scoreMatch(text,n)}))
+                                .filter(x => x.score > 0)
+                                .sort((a,b) => b.score - a.score)
+                                .slice(0,8);
+      return scored;
+    }
 
-    async function runOCR(file) {{
-      ocrOut.textContent = "Reading image…";
-      matchPill.textContent = "—";
-      copyBtn.disabled = true;
+    btn.addEventListener("click", async () => {
+      const file = pepPhoto.files && pepPhoto.files[0];
+      if (!file) return;
 
-      try {{
-        const {{ data: {{ text }} }} = await Tesseract.recognize(file, "eng");
-        const cleaned = (text || "").trim();
-        ocrOut.textContent = cleaned || "(no text found)";
-        const bm = bestMatch(cleaned);
-        matchPill.textContent = bm.name === "—" ? "No match" : `${{bm.name}} (score ${{bm.score}})`;
-        copyBtn.disabled = !cleaned;
-        copyBtn.onclick = () => navigator.clipboard.writeText(cleaned);
-      }} catch (e) {{
-        console.error(e);
-        ocrOut.textContent = "OCR failed. Try a clearer photo or better lighting.";
-      }}
-    }}
+      btn.disabled = true;
+      btn.textContent = "Running OCR...";
+      try{
+        const { data } = await Tesseract.recognize(file, "eng");
+        const text = (data && data.text) ? data.text.trim() : "";
+        pepText.value = text;
 
-    pepPhoto.addEventListener("change", (e) => {{
-      const f = e.target.files && e.target.files[0];
-      if (f) runOCR(f);
-    }});
+        const suggestions = buildSuggestions(text);
+        matchChips.innerHTML = "";
 
-    let cameraStream = null;
+        if (suggestions.length){
+          suggestions.forEach(s => {
+            const chip = document.createElement("div");
+            chip.className = "chip";
+            chip.textContent = s.name;
+            chip.addEventListener("click", () => {
+              const u = new URL(window.location.origin + "/add-vial");
+              u.searchParams.set("suggest_peptide", s.name);
+              window.location.href = u.toString();
+            });
+            matchChips.appendChild(chip);
+          });
+          matchBox.style.display = "block";
+        } else {
+          matchBox.style.display = "block";
+          matchChips.innerHTML = "<div class='muted'>No confident match found — try a closer photo, or just go to Add Vial and select manually.</div>";
+        }
 
-    async function startCamera() {{
-      const wrap = document.getElementById('cameraWrap');
-      const video = document.getElementById('cameraStream');
-      const openBtn = document.getElementById('openCameraBtn');
-      const capBtn = document.getElementById('captureFrameBtn');
-      const stopBtn = document.getElementById('stopCameraBtn');
-
-      try {{
-        cameraStream = await navigator.mediaDevices.getUserMedia({{
-          video: {{ facingMode: {{ ideal: "environment" }} }},
-          audio: false
-        }});
-        video.srcObject = cameraStream;
-        wrap.style.display = 'block';
-        capBtn.style.display = 'inline-flex';
-        stopBtn.style.display = 'inline-flex';
-        openBtn.style.display = 'none';
-      }} catch (e) {{
-        console.error(e);
-        alert("Could not access camera. You can still use the Upload Photo option.");
-      }}
-    }}
-
-    function stopCamera() {{
-      const wrap = document.getElementById('cameraWrap');
-      const openBtn = document.getElementById('openCameraBtn');
-      const capBtn = document.getElementById('captureFrameBtn');
-      const stopBtn = document.getElementById('stopCameraBtn');
-      const video = document.getElementById('cameraStream');
-
-      if (cameraStream) {{
-        cameraStream.getTracks().forEach(t => t.stop());
-        cameraStream = null;
-      }}
-      video.srcObject = null;
-      wrap.style.display = 'none';
-      capBtn.style.display = 'none';
-      stopBtn.style.display = 'none';
-      openBtn.style.display = 'inline-flex';
-    }}
-
-    function capturePhotoToFileInput() {{
-      const video = document.getElementById('cameraStream');
-      const canvas = document.getElementById('cameraCanvas');
-      const input = document.getElementById('peptidePhoto');
-
-      const w = video.videoWidth || 1280;
-      const h = video.videoHeight || 720;
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, w, h);
-
-      canvas.toBlob(blob => {{
-        if (!blob) return;
-        const file = new File([blob], "camera.jpg", {{ type: "image/jpeg" }});
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        input.files = dt.files;
-
-        const evt = new Event('change', {{ bubbles: true }});
-        input.dispatchEvent(evt);
-
-        stopCamera();
-      }}, "image/jpeg", 0.92);
-    }}
-
-    document.getElementById('openCameraBtn')?.addEventListener('click', startCamera);
-    document.getElementById('stopCameraBtn')?.addEventListener('click', stopCamera);
-    document.getElementById('captureFrameBtn')?.addEventListener('click', capturePhotoToFileInput);
-
-    window.addEventListener('DOMContentLoaded', () => {{
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches;
-      if (!isMobile) return;
-
-      const params = new URLSearchParams(window.location.search);
-      const wantsAuto = params.get('autocam') === '1';
-      if (!wantsAuto) return;
-
-      const key = 'autocam_once:/scan-peptides';
-      if (sessionStorage.getItem(key) === '1') return;
-
-      sessionStorage.setItem(key, '1');
-      try {{
-        params.delete('autocam');
-        const newUrl = window.location.pathname + (params.toString() ? ('?' + params.toString()) : '') + window.location.hash;
-        history.replaceState(null, '', newUrl);
-      }} catch (e) {{}}
-
-      setTimeout(() => {{ startCamera(); }}, 350);
-    }});
+      }catch(err){
+        alert("OCR failed. Try again with brighter lighting and closer focus.");
+      }finally{
+        btn.disabled = false;
+        btn.textContent = "🔎 OCR Label";
+      }
+    });
   </script>
 </body>
 </html>"""
+    return render_template_string(html, peptide_names=peptide_names)
 
-    resp = make_response(html)
-    resp.headers["Cache-Control"] = "no-store"
-    return resp
 
+@app.before_request
+def _scan_hint_flash():
+    try:
+        if request.method == "GET" and request.path == "/add-vial":
+            sugg = (request.args.get("suggest_peptide") or "").strip()
+            if sugg:
+                flash(f"Scan suggestion: {sugg}. Please select it below (and enter mg amount).", "info")
+    except Exception:
+        pass
 
 
 @app.route("/")
@@ -986,7 +1422,6 @@ def register():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    """Login with improved mobile support and error handling"""
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
@@ -1002,19 +1437,9 @@ def login():
                 flash("Invalid credentials.", "error")
                 return render_if_exists("login.html", fallback_endpoint="index")
 
-            # Set session
             session["user_id"] = user.id
-            session.permanent = True  # Make session persist across browser restarts
-            
-            flash("Logged in successfully!", "success")
-            
-            # Always redirect to dashboard - onboarding is now optional
+            flash("Logged in!", "success")
             return redirect(url_for("dashboard"))
-        except Exception as e:
-            # Log error but don't expose to user
-            print(f"Login error: {e}")
-            flash("Login error. Please try again.", "error")
-            return render_if_exists("login.html", fallback_endpoint="index")
         finally:
             db.close()
 
@@ -1030,20 +1455,8 @@ def logout():
 @login_required
 @require_onboarding
 def dashboard():
-    """Dashboard with safe profile loading"""
     stats, protocols, recent_injections = _compute_dashboard_context()
-    
-    # Safely get profile (may not exist yet)
-    try:
-        profile = get_user_profile(session["user_id"])
-    except Exception as e:
-        print(f"Profile load error (non-fatal): {e}")
-        profile = None
-    
-    # Add helpful banner if profile not complete
-    if not profile or not getattr(profile, 'completed_at', None):
-        flash("💡 Tip: Complete your profile to unlock personalized features!", "info")
-    
+    profile = get_user_profile(session["user_id"])
     return render_if_exists(
         "dashboard.html",
         fallback_endpoint="index",
@@ -1156,31 +1569,34 @@ def reset_password(token):
 # -----------------------------------------------------------------------------
 # User Profile Routes
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Profile Skip (optional onboarding)
+# -----------------------------------------------------------------------------
+@app.route("/profile-skip", methods=["GET"])
+@login_required
+def profile_skip():
+    """Allow users to skip profile setup and continue to dashboard."""
+    session["profile_skipped"] = True
+    flash("Profile skipped — you can complete it later.", "info")
+    return redirect(url_for("dashboard"))
+
+# Alias endpoints (in case templates reference different names)
+@app.route("/profile/skip", methods=["GET"], endpoint="skip_profile")
+@login_required
+def _skip_profile_alias():
+    session["profile_skipped"] = True
+    flash("Profile skipped — you can complete it later.", "info")
+    return redirect(url_for("dashboard"))
+
 @app.route("/profile-setup", methods=["GET", "POST"])
 @login_required
 def profile_setup():
-    """User profile setup/edit page - SKIPPABLE"""
+    """User profile setup/edit page"""
     db = get_session(db_url)
     try:
         profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
         
         if request.method == "POST":
-            # Check if user clicked "Skip for Now"
-            action = request.form.get("action", "save")
-            
-            if action == "skip":
-                # Mark profile as "completed" to avoid any future redirects/loops.
-                if profile:
-                    profile.completed_at = datetime.utcnow()
-                    profile.updated_at = datetime.utcnow()
-                else:
-                    profile = UserProfile(user_id=session["user_id"], completed_at=datetime.utcnow())
-                    db.add(profile)
-                db.commit()
-                flash("Profile setup skipped. You can complete it anytime from settings!", "info")
-                return redirect(url_for("dashboard"))
-            
-            # Otherwise save the profile (all fields now optional)
             age = request.form.get("age")
             weight_lbs = request.form.get("weight_lbs")
             height_inches = request.form.get("height_inches")
@@ -1189,34 +1605,34 @@ def profile_setup():
             experience_level = request.form.get("experience_level")
             medical_notes = request.form.get("medical_notes", "").strip()
             
+            if not all([age, weight_lbs, height_inches, gender, experience_level]):
+                flash("Please fill in all required fields.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
+            if not goals:
+                flash("Please select at least one goal.", "error")
+                return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
+            
             if profile:
-                # Update existing profile
-                if age:
-                    profile.age = int(age)
-                if weight_lbs:
-                    profile.weight_lbs = float(weight_lbs)
-                if height_inches:
-                    profile.height_inches = int(height_inches)
-                if gender:
-                    profile.gender = gender
-                if goals:
-                    profile.goals = ",".join(goals)  # Store as comma-separated string
-                if experience_level:
-                    profile.experience_level = experience_level
+                profile.age = int(age)
+                profile.weight_lbs = float(weight_lbs)
+                profile.height_inches = int(height_inches)
+                profile.gender = gender
+                profile.goals = json.dumps(goals)
+                profile.experience_level = experience_level
                 profile.medical_notes = medical_notes
                 profile.completed_at = datetime.utcnow()
                 profile.updated_at = datetime.utcnow()
                 flash("Profile updated successfully!", "success")
             else:
-                # Create new profile (all fields optional)
                 profile = UserProfile(
                     user_id=session["user_id"],
-                    age=int(age) if age else None,
-                    weight_lbs=float(weight_lbs) if weight_lbs else None,
-                    height_inches=int(height_inches) if height_inches else None,
-                    gender=gender if gender else None,
-                    goals=",".join(goals) if goals else None,
-                    experience_level=experience_level if experience_level else None,
+                    age=int(age),
+                    weight_lbs=float(weight_lbs),
+                    height_inches=int(height_inches),
+                    gender=gender,
+                    goals=json.dumps(goals),
+                    experience_level=experience_level,
                     medical_notes=medical_notes,
                     completed_at=datetime.utcnow()
                 )
@@ -1228,11 +1644,6 @@ def profile_setup():
         
         return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=profile)
         
-    except Exception as e:
-        print(f"Profile setup error: {e}")
-        db.rollback()
-        flash("Error saving profile. Please try again.", "error")
-        return render_if_exists("profile_setup.html", fallback_endpoint="dashboard", profile=None)
     finally:
         db.close()
 
@@ -1244,26 +1655,6 @@ def get_user_profile(user_id):
         return db.query(UserProfile).filter_by(user_id=user_id).first()
     finally:
         db.close()
-
-
-@app.route("/profile-setup/skip", methods=["GET", "POST"])
-@login_required
-def profile_setup_skip():
-    """Direct skip route - mark profile as completed so it never blocks anything."""
-    db = get_session(db_url)
-    try:
-        profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
-        if profile:
-            profile.completed_at = profile.completed_at or datetime.utcnow()
-            profile.updated_at = datetime.utcnow()
-        else:
-            profile = UserProfile(user_id=session["user_id"], completed_at=datetime.utcnow())
-            db.add(profile)
-        db.commit()
-    finally:
-        db.close()
-    flash("Profile setup skipped. You can complete it anytime from settings!", "info")
-    return redirect(url_for("dashboard"))
 
 
 
@@ -1278,10 +1669,7 @@ def onboarding_step_2():
     if not u:
         return redirect(url_for("login"))
 
-    # If profile isn't complete yet, force step 1 first
-    if not is_profile_complete(u.id):
-        return redirect(url_for("onboarding_step_1"))
-
+    # Profile is optional; do not force step 1.
     if request.method == "POST":
         db = get_session(db_url)
         try:
@@ -1838,17 +2226,140 @@ def chat():
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
-def _pep_ai_system_prompt() -> str:
-    return (
-        "You are Pep AI inside PeptideTracker.ai. "
-        "You provide educational, research-oriented information only. "
-        "No medical advice, diagnosis, treatment recommendations, or dosing instructions. "
-        "If the user asks for dosing, prescriptions, or medical decisions, refuse and suggest they consult a licensed clinician. "
-        "You can help with math (e.g., reconstitution concentration calculations) and summarize study abstracts at a high level. "
-        "Always encourage safety, verification, and professional guidance."
-    )
+def _pep_ai_system_prompt(user_context: dict = None) -> str:
+    """
+    Generate intelligent system prompt with user context.
+    Features 2-5: Context-aware, Protocol-aware, Progress tracking, Smart recommendations
+    """
+    
+    base_prompt = """You are Pep AI, an intelligent research assistant for PeptideTracker.ai.
 
-def _call_openai_chat(message: str) -> str:
+CRITICAL LEGAL BOUNDARIES - NEVER VIOLATE:
+1. You are NOT a doctor, nurse, or licensed healthcare provider
+2. You do NOT provide medical advice, diagnosis, or treatment
+3. You do NOT recommend specific doses for individual users
+4. You ALWAYS direct users to consult healthcare providers for medical decisions
+
+WHAT YOU CAN DO (Educational + Intelligent):
+✓ Explain how peptides work (mechanisms of action)
+✓ Summarize published research studies
+✓ Provide general dosing ranges from research literature
+✓ Compare peptides based on research data
+✓ Help users understand scientific concepts
+✓ Calculate math (reconstitution, concentrations)
+✓ Use user profile, protocols, and tracking data to filter relevant education
+✓ Provide progress insights based on their tracking
+✓ Suggest research-backed next steps (NOT medical prescriptions)
+
+WHAT YOU CANNOT DO:
+✗ Say "You should take X dose" or "I recommend X mcg for you"
+✗ Say "This will cure/treat/fix your condition"
+✗ Interpret symptoms medically or diagnose
+✗ Tell them to start/stop protocols without provider consultation
+✗ Make medical decisions"""
+
+    # Add comprehensive user context if available
+    if user_context:
+        context_section = "\n\n═══ USER CONTEXT (for intelligent personalization) ═══\n"
+        
+        # FEATURE 2: Profile Context
+        if user_context.get("profile"):
+            profile = user_context["profile"]
+            goals_display = ', '.join(profile.get('goals', []))
+            context_section += f"""
+📊 PROFILE:
+• Age: {profile.get('age')} years | Weight: {profile.get('weight_lbs')} lbs | Height: {profile.get('height_inches')}" 
+• Gender: {profile.get('gender')} | Experience: {profile.get('experience_level')}
+• Primary Goals: {goals_display}"""
+        
+        # FEATURE 3: Active Protocols (if available)
+        if user_context.get("active_protocols"):
+            protocols = user_context["active_protocols"]
+            context_section += f"\n\n💉 ACTIVE PROTOCOLS:"
+            for p in protocols:
+                context_section += f"\n• {p['name']}: {p['dose']} {p['frequency']}"
+                if p.get('start_date'):
+                    context_section += f" (Day {p['days_active']})"
+        
+        # FEATURE 4: Recent Progress (if available)
+        if user_context.get("recent_injections"):
+            inj_count = user_context["recent_injections"]["total"]
+            compliance = user_context["recent_injections"]["compliance_rate"]
+            context_section += f"\n\n📈 RECENT ACTIVITY (last 7 days):"
+            context_section += f"\n• Injections logged: {inj_count}"
+            context_section += f"\n• Compliance rate: {compliance}%"
+            if compliance < 70:
+                context_section += " (⚠️ below target)"
+            elif compliance > 90:
+                context_section += " (✓ excellent!)"
+        
+        # FEATURE 5: Smart Insights (if available)
+        if user_context.get("insights"):
+            insights = user_context["insights"]
+            context_section += f"\n\n💡 INSIGHTS:"
+            for insight in insights:
+                context_section += f"\n• {insight}"
+        
+        context_section += "\n\n═══ HOW TO USE THIS CONTEXT ═══"
+        context_section += """
+
+PERSONALIZATION RULES:
+1. **Goal Alignment**: Filter all education through their specific goals
+   - If goals include "recovery" → emphasize tissue repair research
+   - If goals include "fat_loss" → focus on metabolic peptides
+   - If goals include "muscle_gain" → highlight anabolic effects
+
+2. **Experience-Based Complexity**:
+   - Beginner: Simpler explanations, more safety emphasis
+   - Intermediate: Balanced detail, practical applications
+   - Advanced: Technical depth, research citations
+
+3. **Protocol Awareness** (CRITICAL):
+   - Check for interactions with current protocols
+   - Don't suggest peptides that conflict with active ones
+   - Acknowledge what they're already doing: "I see you're using TB-500..."
+
+4. **Progress Recognition**:
+   - Acknowledge their compliance: "Your 95% adherence is excellent..."
+   - Reference tracking: "Based on your X injections this month..."
+   - Celebrate milestones: "You're on day 28 of your protocol..."
+
+5. **Smart Suggestions**:
+   - Cycle completion: "Your 6-week TB-500 cycle ends in 3 days. Research suggests..."
+   - Stacking opportunities: "Given your recovery goals and current BPC-157, research shows TB-500 pairs well..."
+   - Progression: "At intermediate level with 3 months experience, you might explore..."
+
+RESPONSE FRAMEWORK:
+
+When asked about dosing:
+"Research shows [peptide] at [range]. Given your [profile factor], typical dosing in studies is [specific range]. Your healthcare provider can determine the appropriate dose for your situation."
+
+When suggesting next steps:
+"Based on your [goal] goals and [current protocol], research shows [peptide] is commonly explored next. Studies suggest [benefits]. Discuss with your provider whether this aligns with your health plan."
+
+When acknowledging progress:
+"I see you've logged [X injections] with [Y%] compliance - that's [assessment]! Research indicates [relevant finding for their stage]."
+
+NEVER say: "You should do X"
+ALWAYS say: "Research shows X. Discuss with your provider if Y fits your situation."
+"""
+
+        base_prompt += context_section
+
+    # Add mandatory disclaimer
+    base_prompt += """
+
+═══ MANDATORY DISCLAIMER ═══
+Include at end of ANY response about peptides/protocols/dosing:
+
+---
+⚠️ This is educational information from research literature, not medical advice. Always consult your healthcare provider before starting, stopping, or modifying any peptide protocol.
+
+TONE: Intelligent, supportive, educational, safety-conscious. Like a knowledgeable research assistant who knows their data."""
+
+    return base_prompt
+
+def _call_openai_chat(message: str, user_context: dict = None) -> str:
     if not OPENAI_API_KEY:
         return "Pep AI is not configured yet (missing OPENAI_API_KEY). Please contact support."
 
@@ -1860,15 +2371,15 @@ def _call_openai_chat(message: str) -> str:
     payload = {
         "model": OPENAI_MODEL,
         "messages": [
-            {"role": "system", "content": _pep_ai_system_prompt()},
+            {"role": "system", "content": _pep_ai_system_prompt(user_context)},
             {"role": "user", "content": message},
         ],
         "temperature": 0.4,
-        "max_tokens": 500,
+        "max_tokens": 1000,  # Increased for richer, context-aware responses
     }
 
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=25)
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
         if resp.status_code == 401:
             return "Pep AI configuration error: invalid OpenAI key."
         if resp.status_code >= 400:
@@ -1880,6 +2391,100 @@ def _call_openai_chat(message: str) -> str:
     except Exception as e:
         print(f"Pep AI exception: {e}")
         return "Pep AI encountered an error. Please try again."
+
+def _build_comprehensive_user_context(user_id: int, db) -> dict:
+    """
+    Build comprehensive context about user for intelligent AI responses.
+    Features 2-5: Profile, Protocols, Progress, Smart Insights
+    """
+    context = {}
+    
+    # FEATURE 2: User Profile
+    try:
+        profile = db.query(UserProfile).filter_by(user_id=user_id).first()
+        if profile and profile.completed_at:
+            context["profile"] = {
+                "age": profile.age,
+                "weight_lbs": profile.weight_lbs,
+                "height_inches": profile.height_inches,
+                "gender": profile.gender,
+                "goals": json.loads(profile.goals) if profile.goals else [],
+                "experience_level": profile.experience_level
+            }
+    except Exception as e:
+        print(f"Error loading profile: {e}")
+    
+    # FEATURE 3: Active Protocols (placeholder - adapt if you have Protocol model)
+    try:
+        # If you have a Protocol/PeptideProtocol model, load it here
+        # For now, this is a placeholder structure showing what to track
+        # protocols = db.query(Protocol).filter_by(user_id=user_id, active=True).all()
+        # if protocols:
+        #     context["active_protocols"] = [
+        #         {
+        #             "name": p.peptide_name,
+        #             "dose": p.dose_amount,
+        #             "frequency": p.frequency,
+        #             "start_date": p.start_date,
+        #             "days_active": (datetime.utcnow() - p.start_date).days
+        #         }
+        #         for p in protocols
+        #     ]
+        pass
+    except Exception as e:
+        print(f"Error loading protocols: {e}")
+    
+    # FEATURE 4: Recent Progress & Compliance
+    try:
+        # If you have Injection tracking model
+        # from datetime import timedelta
+        # week_ago = datetime.utcnow() - timedelta(days=7)
+        # recent_injections = db.query(Injection).filter(
+        #     Injection.user_id == user_id,
+        #     Injection.date >= week_ago
+        # ).count()
+        # 
+        # if recent_injections > 0:
+        #     # Calculate expected vs actual
+        #     # expected = active_protocols * frequency * 7
+        #     # compliance = (recent_injections / expected) * 100
+        #     context["recent_injections"] = {
+        #         "total": recent_injections,
+        #         "compliance_rate": 85  # Calculate based on schedule
+        #     }
+        pass
+    except Exception as e:
+        print(f"Error loading injection history: {e}")
+    
+    # FEATURE 5: Smart Insights
+    try:
+        insights = []
+        
+        # Example insights based on data:
+        # if context.get("recent_injections"):
+        #     compliance = context["recent_injections"]["compliance_rate"]
+        #     if compliance > 90:
+        #         insights.append("Excellent compliance this week!")
+        #     elif compliance < 70:
+        #         insights.append("Compliance dropped - check reminders?")
+        
+        # if context.get("active_protocols"):
+        #     for protocol in context["active_protocols"]:
+        #         if protocol["days_active"] >= 40:
+        #             insights.append(f"{protocol['name']} protocol nearing completion (typical 6-8 week cycle)")
+        
+        # if context.get("profile"):
+        #     goals = context["profile"]["goals"]
+        #     if "recovery" in goals and not context.get("active_protocols"):
+        #         insights.append("No active recovery protocols - explore BPC-157 or TB-500 research")
+        
+        if insights:
+            context["insights"] = insights
+            
+    except Exception as e:
+        print(f"Error generating insights: {e}")
+    
+    return context
 
 @app.route("/api/chat", methods=["POST"])
 @login_required
@@ -1917,7 +2522,11 @@ def api_chat():
             db.commit()
             remaining = max(FREE_PEP_AI_LIMIT - usage.used, 0)
 
-        reply = _call_openai_chat(message)
+        # Build comprehensive user context (Features 2-5)
+        user_context = _build_comprehensive_user_context(user.id, db)
+        
+        # Call AI with full context for intelligent responses
+        reply = _call_openai_chat(message, user_context)
 
         resp = {"reply": reply}
         if remaining is not None:
@@ -1941,6 +2550,146 @@ def upgrade():
 # -----------------------------------------------------------------------------
 # Run
 # -----------------------------------------------------------------------------
+
+
+# ----------------------------
+# Syringe Check (Dose + BAC verification) — idempotent registration
+# ----------------------------
+def _syringe_check():
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
+            vials = getattr(pdb, "list_active_vials", lambda: [])()
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocols/vials for syringe check")
+        protocols, vials = [], []
+    return render_if_exists("syringe_check.html", fallback_endpoint="dashboard", protocols=protocols, vials=vials, title="Syringe Check")
+
+
+def _syringe_check_camera():
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            protocols = getattr(pdb, "list_active_protocols", lambda: [])()
+            vials = getattr(pdb, "list_active_vials", lambda: [])()
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocols/vials for syringe camera check")
+        protocols, vials = [], []
+    return render_if_exists("syringe_check_camera.html", fallback_endpoint="syringe_check", protocols=protocols, vials=vials, title="Syringe Camera Check")
+
+
+def _api_syringe_expected():
+    protocol_id = (request.args.get("protocol_id") or "").strip()
+    vial_id = (request.args.get("vial_id") or "").strip()
+    dose_mcg_override = (request.args.get("dose_mcg") or "").strip()
+    water_ml_override = (request.args.get("water_ml") or "").strip()
+
+    protocol = None
+    vial = None
+
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+
+            if protocol_id:
+                getp = getattr(pdb, "get_protocol", None) or getattr(pdb, "get_protocol_by_id", None)
+                if callable(getp):
+                    protocol = getp(int(protocol_id))
+                else:
+                    for p in getattr(pdb, "list_active_protocols", lambda: [])():
+                        if getattr(p, "id", None) == int(protocol_id):
+                            protocol = p
+                            break
+
+            if vial_id:
+                getv = getattr(pdb, "get_vial", None) or getattr(pdb, "get_vial_by_id", None)
+                if callable(getv):
+                    vial = getv(int(vial_id))
+                else:
+                    for v in getattr(pdb, "list_active_vials", lambda: [])():
+                        if getattr(v, "id", None) == int(vial_id):
+                            vial = v
+                            break
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load protocol/vial in syringe expected API")
+
+    dose_mcg = None
+    try:
+        if dose_mcg_override:
+            dose_mcg = float(dose_mcg_override)
+    except Exception:
+        dose_mcg = None
+
+    if dose_mcg is None and protocol is not None:
+        try:
+            dose_mcg = float(getattr(protocol, "dose_mcg", None))
+        except Exception:
+            dose_mcg = None
+
+    mg_amount = None
+    try:
+        if vial is not None:
+            mg_amount = float(getattr(vial, "mg_amount", None))
+    except Exception:
+        mg_amount = None
+
+    water_ml = None
+    try:
+        if water_ml_override:
+            water_ml = float(water_ml_override)
+        elif vial is not None:
+            water_ml = float(getattr(vial, "bacteriostatic_water_ml", None))
+    except Exception:
+        water_ml = None
+
+    mg_per_ml = None
+    mcg_per_ml = None
+    expected_volume_ml = None
+    expected_units_u100 = None
+
+    if mg_amount and water_ml and water_ml > 0:
+        mg_per_ml = mg_amount / water_ml
+        mcg_per_ml = mg_per_ml * 1000.0
+
+    if dose_mcg and mcg_per_ml and mcg_per_ml > 0:
+        expected_volume_ml = dose_mcg / mcg_per_ml
+        expected_units_u100 = expected_volume_ml * 100.0
+
+    return jsonify(
+        {
+            "protocol_id": int(protocol_id) if protocol_id.isdigit() else None,
+            "vial_id": int(vial_id) if vial_id.isdigit() else None,
+            "dose_mcg": dose_mcg,
+            "vial_mg_amount": mg_amount,
+            "water_ml": water_ml,
+            "mg_per_ml": mg_per_ml,
+            "mcg_per_ml": mcg_per_ml,
+            "expected_volume_ml": expected_volume_ml,
+            "expected_units_u100": expected_units_u100,
+        }
+    )
+
+
+# Register routes only if they don't already exist
+if "login_required" in globals():
+    register_route("/syringe-check", "syringe_check", login_required(_syringe_check))
+    register_route("/syringe-check/camera", "syringe_check_camera", login_required(_syringe_check_camera))
+    register_route("/api/syringe-check/expected", "api_syringe_check_expected", login_required(_api_syringe_expected))
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_ENV") == "development"
@@ -1948,3 +2697,27 @@ if __name__ == "__main__":
 
 
 FREE_TRIAL_LIMIT = 10  # free tier Pep AI messages
+
+
+# -----------------------------------------------------------------------------
+# Confidence Score API (data-alignment + verification confidence)
+# -----------------------------------------------------------------------------
+@app.route("/api/injection-confidence", methods=["POST"])
+@login_required
+def api_injection_confidence():
+    """
+    POST JSON payload (see confidence.compute_injection_confidence docstring).
+    Returns: {score, band, reasons}
+    """
+    try:
+        payload = request.get_json(force=True) or {}
+    except Exception:
+        payload = {}
+
+    result = compute_injection_confidence(payload)
+    # Do NOT return debug by default in production; keep for now for tuning.
+    include_debug = bool(request.args.get("debug"))
+    if not include_debug and "debug" in result:
+        result.pop("debug", None)
+    return jsonify(result)
+
