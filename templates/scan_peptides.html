@@ -413,6 +413,11 @@
         <label class="form-label">Vial Size (mg)</label>
         <input id="vialMg" type="number" step="0.1" placeholder="e.g., 5 or 10" />
       </div>
+      <div class="form-group">
+        <label class="form-label">Number of Vials (optional)</label>
+        <input id="numVials" type="number" min="1" step="1" value="1" />
+      </div>
+      
       
       <button id="saveVialBtn" class="btn-primary" type="button">
         💾 Save to Vials
@@ -598,6 +603,7 @@
     async function saveVial() {
       const peptideName = peptideSelect.value;
       const mgAmount = parseFloat(vialMg.value) || 0;
+      const numVials = Math.max(1, Math.min(50, parseInt((document.getElementById('numVials')?.value || '1'), 10) || 1));
 
       if (!peptideName) {
         saveStatus.textContent = '❌ Please select a peptide';
@@ -611,6 +617,7 @@
         const payload = {
           peptide_name: peptideName,
           vial_size_mg: mgAmount,
+          num_vials: numVials,
           raw_text: ocrText.value || '',
           notes: `Scanned from label`
         };

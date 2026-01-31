@@ -1469,95 +1469,124 @@ def api_scan_peptide_label():
 @app.post("/api/save-scanned-peptide")
 @login_required
 def api_save_scanned_peptide():
-    """Create a vial from a scan result so user doesn't have to type.
+    """Create one or more vials from a scan result so the user doesn't have to type.
 
     Uses the existing PeptideDB helper (same mechanism as /add-vial).
+    Returns JSON always (even on errors) so the mobile UI never displays HTML.
     """
-    payload = request.get_json(silent=True) or {}
-    peptide_name = (payload.get("peptide_name") or payload.get("name") or "").strip()
-    if not peptide_name:
-        return jsonify({"error": "peptide_name required"}), 400
-
-    def _f(x):
-        try:
-            return float(x)
-        except Exception:
-            return None
-
-    vial_size_mg = _f(payload.get("vial_size_mg")) or 0.0
-    bac_water_ml = _f(payload.get("bac_water_ml"))
-    notes = (payload.get("notes") or payload.get("raw_text") or "")[:300]
-
-    # Find peptide_id by name (case-insensitive) using PeptideDB list
     try:
-        from database import PeptideDB  # type: ignore
-    except Exception as e:
-        return jsonify({"error": f"Database helper not available: {e}"}), 500
+        payload = request.get_json(silent=True) or {}
+        peptide_name = (payload.get("peptide_name") or payload.get("name") or "").strip()
+        if not peptide_name:
+            return jsonify({"error": "peptide_name required"}), 400
 
-    db = get_session(db_url)
-    try:
-        pdb = PeptideDB(db)
-        _seed_peptides_if_empty(pdb)
-
-        peptides = getattr(pdb, "list_peptides", lambda: [])()
-        peptide_id = None
-        for p in peptides or []:
+        def _f(x):
             try:
-                if (p.get("name") or "").strip().lower() == peptide_name.lower():
-                    peptide_id = int(p.get("id"))
-                    break
+                return float(x)
             except Exception:
-                continue
+                return None
 
-        if peptide_id is None:
-            add_pep = getattr(pdb, "add_peptide", None)
-            if callable(add_pep):
-                add_pep(name=peptide_name, common_name=None)
-                db.commit()
-                peptides = getattr(pdb, "list_peptides", lambda: [])()
-                for p in peptides or []:
+        def _i(x, default=1):
+            try:
+                v = int(str(x).strip())
+                return v
+            except Exception:
+                return default
+
+        vial_size_mg = _f(payload.get("vial_size_mg")) or 0.0
+        bac_water_ml = _f(payload.get("bac_water_ml"))
+        notes = (payload.get("notes") or payload.get("raw_text") or "")[:300]
+
+        num_vials = _i(payload.get("num_vials") or payload.get("number_of_vials") or 1, default=1)
+        if num_vials < 1:
+            num_vials = 1
+        if num_vials > 50:
+            num_vials = 50  # safety
+
+        # Find peptide_id by name (case-insensitive) using PeptideDB list
+        try:
+            from database import PeptideDB  # type: ignore
+        except Exception as e:
+            return jsonify({"error": f"Database helper not available: {e}"}), 500
+
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            _seed_peptides_if_empty(pdb)
+
+            peptides = getattr(pdb, "list_peptides", lambda: [])()
+            peptide_id = None
+            for p in peptides or []:
+                try:
                     if (p.get("name") or "").strip().lower() == peptide_name.lower():
                         peptide_id = int(p.get("id"))
                         break
+                except Exception:
+                    continue
 
-        if peptide_id is None:
-            return jsonify({"error": "Could not find or create peptide"}), 500
+            # Create peptide if missing (best-effort)
+            if peptide_id is None:
+                add_pep = getattr(pdb, "add_peptide", None)
+                if callable(add_pep):
+                    add_pep(name=peptide_name, common_name=None)
+                    db.commit()
+                    peptides = getattr(pdb, "list_peptides", lambda: [])()
+                    for p in peptides or []:
+                        try:
+                            if (p.get("name") or "").strip().lower() == peptide_name.lower():
+                                peptide_id = int(p.get("id"))
+                                break
+                        except Exception:
+                            continue
 
-        add_vial = getattr(pdb, "add_vial", None)
-        if not callable(add_vial):
-            return jsonify({"error": "Database helper does not implement add_vial()"}), 500
+            if peptide_id is None:
+                return jsonify({"error": "Could not find or create peptide"}), 500
 
-        add_vial(
-            peptide_id=peptide_id,
-            mg_amount=float(vial_size_mg),
-            bacteriostatic_water_ml=bac_water_ml,
-            purchase_date=datetime.utcnow(),
-            reconstitution_date=datetime.utcnow(),
-            lot_number=None,
-            vendor=None,
-            cost=None,
-            notes=notes or None,
-        )
-        db.commit()
+            add_vial = getattr(pdb, "add_vial", None)
+            if not callable(add_vial):
+                return jsonify({"error": "Database helper does not implement add_vial()"}), 500
 
-        # Best-effort: return the latest vial id if helper exposes it
-        vial_id = None
-        try:
-            vials = getattr(pdb, "list_vials", lambda user_id=None: [])()
-            if vials:
-                vial_id = vials[-1].get("id")
-        except Exception:
-            pass
+            for _ in range(num_vials):
+                add_vial(
+                    peptide_id=peptide_id,
+                    mg_amount=float(vial_size_mg),
+                    bacteriostatic_water_ml=bac_water_ml,
+                    purchase_date=datetime.utcnow(),
+                    reconstitution_date=datetime.utcnow(),
+                    lot_number=None,
+                    vendor=None,
+                    cost=None,
+                    notes=notes or None,
+                )
+            db.commit()
 
-        return jsonify({
-            "success": True,
-            "vial_id": vial_id,
-            "peptide_name": peptide_name,
-            "vial_size_mg": vial_size_mg,
-        })
-    finally:
-        db.close()
+            # Best-effort: if helper provides list_active_vials, try to get latest id
+            vial_id = None
+            try:
+                vials = getattr(pdb, "list_active_vials", None)
+                if callable(vials):
+                    vv = vials()
+                    if vv:
+                        vial_id = getattr(vv[-1], "id", None) or (vv[-1].get("id") if isinstance(vv[-1], dict) else None)
+            except Exception:
+                vial_id = None
 
+            return jsonify({
+                "success": True,
+                "created": num_vials,
+                "vial_id": vial_id,
+                "peptide_name": peptide_name,
+                "vial_size_mg": vial_size_mg,
+            }), 200
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    except Exception as e:
+        app.logger.exception("api_save_scanned_peptide failed")
+        return jsonify({"error": "save_failed", "details": str(e)[:500]}), 500
 @app.route("/")
 def index():
     if "user_id" in session:
@@ -2949,4 +2978,3 @@ def api_injection_confidence():
     if not include_debug and "debug" in result:
         result.pop("debug", None)
     return jsonify(result)
-
