@@ -429,6 +429,8 @@
 
   <script>
   (() => {
+    const ALL_PEPTIDES = {{ (all_peptides or [])|tojson }};
+
     // DOM elements
     const cameraInput = document.getElementById('cameraInput');
     const fileInput = document.getElementById('fileInput');
@@ -504,37 +506,60 @@
       peptideSelect.innerHTML = '';
       currentMatches = matches || [];
 
+      // Always show save section; user can choose from full library even if OCR is unclear
+      saveSection.style.display = 'block';
+
+      const existing = new Set();
+
       if (currentMatches.length === 0) {
         noCandidates.style.display = 'block';
-        saveSection.style.display = 'none';
-        return;
+      } else {
+        noCandidates.style.display = 'none';
+
+        currentMatches.forEach((match, index) => {
+          const name = match.name || match;
+          const confidence = match.confidence || 0;
+
+          existing.add(String(name));
+
+          // Create chip button
+          const chip = document.createElement('div');
+          chip.className = 'chip';
+          chip.innerHTML = `
+            <span class="chip-name">${name}</span>
+            <span class="chip-confidence">${Math.round(confidence * 100)}%</span>
+          `;
+          chip.addEventListener('click', () => copyToClipboard(name));
+          candidates.appendChild(chip);
+
+          // Add to select dropdown
+          const option = document.createElement('option');
+          option.value = name;
+          option.textContent = `${name} (${Math.round(confidence * 100)}%)`;
+          if (index === 0) option.selected = true;
+          peptideSelect.appendChild(option);
+        });
       }
 
-      noCandidates.style.display = 'none';
+      // Add full peptide library options (deduped)
+      if (Array.isArray(ALL_PEPTIDES) && ALL_PEPTIDES.length) {
+        // visual separator
+        const sep = document.createElement('option');
+        sep.disabled = true;
+        sep.textContent = '────────  All peptides  ────────';
+        peptideSelect.appendChild(sep);
 
-      currentMatches.forEach((match, index) => {
-        const name = match.name || match;
-        const confidence = match.confidence || 0;
-        
-        // Create chip button
-        const chip = document.createElement('div');
-        chip.className = 'chip';
-        chip.innerHTML = `
-          <span class="chip-name">${name}</span>
-          <span class="chip-confidence">${Math.round(confidence * 100)}%</span>
-        `;
-        chip.addEventListener('click', () => copyToClipboard(name));
-        candidates.appendChild(chip);
+        ALL_PEPTIDES.forEach(p => {
+          const name = (p && p.name) ? String(p.name) : '';
+          if (!name) return;
+          if (existing.has(name)) return;
 
-        // Add to select dropdown
-        const option = document.createElement('option');
-        option.value = name;
-        option.textContent = `${name} (${Math.round(confidence * 100)}%)`;
-        if (index === 0) option.selected = true;
-        peptideSelect.appendChild(option);
-      });
-
-      saveSection.style.display = 'block';
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          peptideSelect.appendChild(opt);
+        });
+      }
     }
 
     // Copy to clipboard

@@ -1398,7 +1398,34 @@ def api_scan_correction():
 def scan_peptides():
     """Phase 1: native-camera peptide label scan UI."""
     autocam = request.args.get("autocam") == "1"
-    return render_template("scan_peptides.html", autocam=autocam)
+
+    # Provide the full peptide library so the dropdown always offers every peptide
+    all_peptides = []
+    try:
+        from database import PeptideDB  # type: ignore
+        db = get_session(db_url)
+        try:
+            pdb = PeptideDB(db)
+            peptides_list = getattr(pdb, "list_peptides", lambda: [])() or []
+        finally:
+            db.close()
+
+        def _get(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
+        for p in peptides_list:
+            name = (_get(p, "name", "") or "").strip()
+            pid = _get(p, "id", None)
+            if name and pid is not None:
+                all_peptides.append({"id": int(pid), "name": name})
+    except Exception:
+        app.logger.exception("Failed to load peptides for scan page")
+        all_peptides = []
+
+    return render_template("scan_peptides.html", autocam=autocam, all_peptides=all_peptides)
+
 
 
 @app.route("/api/scan-peptide-label", methods=["POST"])
@@ -1527,11 +1554,37 @@ def api_save_scanned_peptide():
 
             peptides = getattr(pdb, "list_peptides", lambda: [])()
             peptide_id = None
+
+            # Normalize incoming name (strip confidence like "BPC-157 (100%)")
+            peptide_name_clean = re.sub(r"\s*\(.*?\)\s*$", "", peptide_name).strip()
+
+            def _get(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+
+            def _norm(s: str) -> str:
+                s = (s or "").strip().lower()
+                s = s.replace("—","-").replace("–","-").replace("_","-")
+                s = re.sub(r"\s+", " ", s)
+                # common aliases
+                s = s.replace("bpc 157","bpc-157").replace("bpc157","bpc-157")
+                s = s.replace("tb500","tb-500").replace("tb 500","tb-500")
+                s = s.replace("pt141","pt-141").replace("pt 141","pt-141")
+                s = s.replace("mt2","mt-2").replace("mt 2","mt-2")
+                s = s.replace("semiglutide","semaglutide")
+                return s
+
+            target = _norm(peptide_name_clean)
+
             for p in peptides or []:
                 try:
-                    if (p.get("name") or "").strip().lower() == peptide_name.lower():
-                        peptide_id = int(p.get("id"))
-                        break
+                    pname = _get(p, "name", "") or _get(p, "common_name", "") or ""
+                    if _norm(pname) == target:
+                        pid = _get(p, "id", None)
+                        if pid is not None:
+                            peptide_id = int(pid)
+                            break
                 except Exception:
                     continue
 
@@ -1539,19 +1592,31 @@ def api_save_scanned_peptide():
             if peptide_id is None:
                 add_pep = getattr(pdb, "add_peptide", None)
                 if callable(add_pep):
-                    add_pep(name=peptide_name, common_name=None)
-                    db.commit()
+                    try:
+                        # try common signatures
+                        try:
+                            add_pep(name=peptide_name_clean, common_name=None)
+                        except TypeError:
+                            add_pep(peptide_name_clean)
+                        db.commit()
+                    except Exception:
+                        # if add fails, continue to error below
+                        pass
+
                     peptides = getattr(pdb, "list_peptides", lambda: [])()
                     for p in peptides or []:
                         try:
-                            if (p.get("name") or "").strip().lower() == peptide_name.lower():
-                                peptide_id = int(p.get("id"))
-                                break
+                            pname = _get(p, "name", "") or _get(p, "common_name", "") or ""
+                            if _norm(pname) == target:
+                                pid = _get(p, "id", None)
+                                if pid is not None:
+                                    peptide_id = int(pid)
+                                    break
                         except Exception:
                             continue
 
             if peptide_id is None:
-                return jsonify({"error": "Could not find or create peptide"}), 500
+                return jsonify({"error": f"peptide_not_found: {peptide_name_clean}"}), 400
 
             add_vial = getattr(pdb, "add_vial", None)
             if not callable(add_vial):
@@ -1721,6 +1786,55 @@ def dashboard():
     except Exception as e:
         print(f"Food logs dashboard fallback (non-fatal): {e}")
 
+
+    # Active vials preview for dashboard (visual fill estimate)
+    active_vials_preview = []
+    try:
+        u = get_current_user()
+        if u:
+            from database import PeptideDB  # type: ignore
+            db = get_session(db_url)
+            try:
+                pdb = PeptideDB(db)
+                vials = getattr(pdb, "list_active_vials", lambda: [])() or []
+            finally:
+                db.close()
+
+            def _get(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+
+            def _to_float(x):
+                try:
+                    return float(x)
+                except Exception:
+                    return None
+
+            for v in (vials[:6] if isinstance(vials, list) else []):
+                name = (_get(v, "peptide_name", None) or _get(v, "peptide", None) or _get(v, "name", None) or "").strip()
+                vial_id = _get(v, "id", None)
+
+                total_mg = _to_float(_get(v, "vial_size_mg", None) or _get(v, "total_mg", None) or _get(v, "amount_mg", None))
+                remaining_mg = _to_float(_get(v, "remaining_mg", None) or _get(v, "mg_remaining", None) or _get(v, "remaining", None))
+
+                pct = None
+                if total_mg and remaining_mg is not None:
+                    try:
+                        pct = max(0.0, min(1.0, remaining_mg / total_mg))
+                    except Exception:
+                        pct = None
+
+                active_vials_preview.append({
+                    "id": vial_id,
+                    "name": name,
+                    "total_mg": total_mg,
+                    "remaining_mg": remaining_mg,
+                    "pct": pct,
+                })
+    except Exception as e:
+        print(f"Active vials preview fallback (non-fatal): {e}")
+
     return render_if_exists(
         "dashboard.html",
         fallback_endpoint="index",
@@ -1730,6 +1844,7 @@ def dashboard():
         profile=profile,
         food_logs=food_logs,
         food_totals_today=food_totals_today,
+        active_vials_preview=active_vials_preview,
     )
 
 
