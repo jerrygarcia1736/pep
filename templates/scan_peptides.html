@@ -362,7 +362,7 @@
     <!-- Action Buttons -->
     <div class="button-row">
       <button id="btnCamera" class="btn-primary" type="button">
-        📸 Take Photo
+        📷 Camera
       </button>
       <button id="btnFile" class="btn-secondary" type="button">
         📁 Choose File
@@ -582,6 +582,12 @@
         ocrText.value = data.raw_text || data.text || '';
         lastFingerprint = data.fingerprint || null;
 
+        // Auto-populate vial size (mg) if detected
+        if (data.vial_mg && !isNaN(parseFloat(data.vial_mg))) {
+          vialMg.value = String(parseFloat(data.vial_mg));
+        }
+
+
         // Display matches
         const matches = data.matches || [];
         renderCandidates(matches);
@@ -653,7 +659,7 @@
         try { data = JSON.parse(text); } catch (e) {}
 
         if (!response.ok) {
-          throw new Error((data?.error || 'Failed to save') + (data?.details ? (': ' + data.details) : ''));
+          throw new Error(data?.error || text || 'Failed to save');
         }
 
         const vialId = data.vial_id || 'new';
