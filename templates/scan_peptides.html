@@ -653,7 +653,7 @@
         try { data = JSON.parse(text); } catch (e) {}
 
         if (!response.ok) {
-          throw new Error(data?.error || text || 'Failed to save');
+          throw new Error((data?.error || 'Failed to save') + (data?.details ? (': ' + data.details) : ''));
         }
 
         const vialId = data.vial_id || 'new';
