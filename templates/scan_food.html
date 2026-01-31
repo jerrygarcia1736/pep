@@ -154,6 +154,15 @@
     const file = uploadInput.files && uploadInput.files[0];
     if (file) analyze(file);
   });
+
+  // Auto-open the camera picker when launched from dashboard links like
+  // /scan-nutrition?autocam=1 (must still be initiated from the page load
+  // context, so we do it after a short delay).
+  {% if autocam %}
+  setTimeout(() => {
+    try { btnTake.click(); } catch (e) {}
+  }, 350);
+  {% endif %}
 })();
 </script>
 {% endblock %}

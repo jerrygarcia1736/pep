@@ -5,7 +5,7 @@ CRUD operations for peptide management
 
 from datetime import datetime, timedelta
 from typing import List, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from models import Peptide, Vial, Protocol, Injection, ResearchNote
 from models import AdministrationRoute, StorageMethod
 
@@ -207,11 +207,23 @@ class PeptideDB:
     
     def get_protocol(self, protocol_id: int) -> Optional[Protocol]:
         """Get protocol by ID"""
-        return self.session.query(Protocol).filter(Protocol.id == protocol_id).first()
+        return (
+            self.session.query(Protocol)
+            .options(joinedload(Protocol.peptide))
+            .filter(Protocol.id == protocol_id)
+            .first()
+        )
     
     def list_active_protocols(self) -> List[Protocol]:
         """List all active protocols"""
-        return self.session.query(Protocol).filter(Protocol.is_active == True).all()
+        # Eager-load Protocol.peptide so templates can safely access
+        # protocol.peptide.name after the session is closed.
+        return (
+            self.session.query(Protocol)
+            .options(joinedload(Protocol.peptide))
+            .filter(Protocol.is_active == True)
+            .all()
+        )
     
     def complete_protocol(self, protocol_id: int) -> Optional[Protocol]:
         """Mark protocol as complete"""
