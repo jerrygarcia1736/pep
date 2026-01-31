@@ -131,6 +131,7 @@
     const fat = macros.fat ?? 0;
     const fiber = macros.fiber ?? 0;
     const logId = data.food_log_id;
+    window.__lastFoodFingerprint = data.fingerprint || null;
 
     const html = `
       <div class="alert alert-success d-flex align-items-center gap-2 mb-3">
@@ -208,6 +209,11 @@
             </div>
           </div>
 
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" id="rememberFood" checked>
+            <label class="form-check-label small" for="rememberFood">Remember this food result for next time</label>
+          </div>
+
           <div class="d-flex align-items-center gap-2 mt-3">
             <button id="btn_save_edits" class="btn btn-primary">
               <i class="bi bi-save"></i> Save Edits
@@ -261,6 +267,27 @@
           
           editStatus.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Saved!</span>';
           setTimeout(() => { editStatus.textContent = ''; }, 3000);
+
+          // Save correction so this exact label/photo is recognized next time
+          try {
+            const remember = document.getElementById('rememberFood');
+            const fp = window.__lastFoodFingerprint;
+            if (remember && remember.checked && fp) {
+              await fetch('/api/scan-correction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  scan_type: 'food',
+                  fingerprint: fp,
+                  corrected: payload.food_name,
+                  original: payload.food_name
+                })
+              });
+            }
+          } catch (e) {
+            console.warn('Could not save correction:', e);
+          }
+
         } catch (e) {
           editStatus.innerHTML = `<span class="text-danger">${escapeHtml(e?.message || String(e))}</span>`;
         } finally {
@@ -287,6 +314,7 @@
       
       const text = await resp.text();
       let data = null;
+      window.__lastFoodFingerprint = null;
       try { data = JSON.parse(text); } catch (e) {}
 
       if (!resp.ok || data?.ok === false) {

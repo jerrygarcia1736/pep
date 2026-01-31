@@ -10,7 +10,10 @@ UPDATED:
 from __future__ import annotations
 
 import os
+import io
 import json
+import re
+import hashlib
 import requests
 import secrets
 from datetime import datetime, timedelta
@@ -22,7 +25,7 @@ import base64
 from werkzeug.security import generate_password_hash, check_password_hash
 from jinja2 import TemplateNotFound
 
-from sqlalchemy import Column, Integer, String, DateTime, Float, text
+from sqlalchemy import Column, Integer, String, DateTime, Float, text, func
 from config import Config
 from models import get_session, create_engine, Base as ModelBase
 
@@ -30,6 +33,50 @@ from models import get_session, create_engine, Base as ModelBase
 from nutrition_api import register_nutrition_routes
 from confidence import compute_injection_confidence
 
+
+
+# -----------------------------------------------------------------------------
+# Lightweight image preprocessing (optional)
+# - Improves OCR/handwriting results from phone photos
+# - Uses Pillow if installed; otherwise no-op
+# -----------------------------------------------------------------------------
+try:
+    from PIL import Image, ImageOps, ImageEnhance, ImageFilter  # type: ignore
+except Exception:  # Pillow not installed
+    Image = None  # type: ignore
+
+def _preprocess_for_vision(image_bytes: bytes) -> bytes:
+    """Best-effort preprocessing to improve vision/OCR accuracy.
+
+    - Fix iPhone EXIF rotation
+    - Autocontrast + sharpen
+    - Resize down to a sane max dimension for speed
+    """
+    if Image is None:
+        return image_bytes
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGB")
+
+        max_side = 1600
+        w, h = img.size
+        scale = max(w, h) / max_side
+        if scale > 1:
+            img = img.resize((int(w / scale), int(h / scale)))
+
+        img = ImageOps.autocontrast(img)
+        img = ImageEnhance.Sharpness(img).enhance(1.7)
+        img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=90, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return image_bytes
+
+def _fingerprint_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
 
 def _openai_identify_food_from_image(image_b64: str, mime_type: str = "image/jpeg") -> dict:
     """Identify a food item from an image using the OpenAI Responses API.
@@ -209,23 +256,34 @@ def _openai_scan_peptide_label(image_b64: str, peptide_names: list[str], mime_ty
     model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4.1-mini")
     data_url = f"data:{mime_type};base64,{image_b64}"
 
-    prompt = """
-You are an OCR + parsing assistant for peptide vial labels (printed OR handwritten).
+    # Provide the model a constrained list to reduce hallucinations and improve handwriting guesses
+    known_list = ", ".join([p for p in (peptide_names or []) if p])[:6000]
+
+    prompt = f"""
+You are an OCR + parsing assistant for peptide vial/box labels (printed OR handwritten).
 Extract the most likely peptide name(s) and any quantity information from the label.
 
+Strong preference:
+- Choose peptide names from this known list when possible:
+{known_list}
+
+User's most common peptides (extra bias):
+{", ".join(TOP_PEPTIDES)}
+
 Return ONLY strict JSON with this schema:
-{
+{{
   "text": string,                  # best-effort transcription of visible label text
-  "peptides": [string],            # peptide names found (normalized)
+  "peptides": [string],            # peptide names found (best guess)
   "quantities": [
-    {"amount": number, "unit": "mg"|"mcg"|"iu"|null}
+    {{"amount": number, "unit": "mg"|"mcg"|"iu"|null}}
   ],
   "confidence": number,            # 0-1 overall confidence
   "candidates": [string]           # up to 8 likely peptide name guesses if uncertain
-}
+}}
 
 Rules:
-- If handwritten is unclear, still provide candidates.
+- If handwritten is unclear, still provide candidates (best guesses).
+- Normalize common forms: TB500→TB-500, BPC 157→BPC-157, PT141→PT-141, MT2→MT-2, semiglutide→semaglutide.
 - Keep output as JSON only. No markdown, no extra text.
 """.strip()
 
@@ -342,20 +400,45 @@ class PepAIUsage(ModelBase):
 
 class FoodLog(ModelBase):
     __tablename__ = "food_logs"
-    
+
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     description = Column(String(500), nullable=False)
-    
-    # Nutrition totals
+
+    # Legacy totals (kept for dashboard summaries)
     total_calories = Column(Float, default=0)
     total_protein_g = Column(Float, default=0)
     total_fat_g = Column(Float, default=0)
     total_carbs_g = Column(Float, default=0)
-    
-    # Raw API response
+
+    # Normalized fields (used by Scan Food edit UI)
+    food_name = Column(String(200))
+    calories = Column(Float)
+    protein_g = Column(Float)
+    carbs_g = Column(Float)
+    fat_g = Column(Float)
+    serving_size_g = Column(Float)
+
+    source = Column(String(50))
+    confidence = Column(Float)  # 0-1
+    fingerprint = Column(String(64), index=True)
+    raw_text = Column(String(2000))
+    alternatives_json = Column(String(2000))
+    notes = Column(String(500))
+
     raw_data = Column(String(5000))
+
+class ScanCorrection(ModelBase):
+    __tablename__ = "scan_corrections"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    scan_type = Column(String(20), nullable=False, index=True)  # "peptide" | "food"
+    fingerprint = Column(String(64), nullable=False, index=True)
+    original = Column(String(400))
+    corrected = Column(String(200), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 # Password reset token model
 class PasswordResetToken(ModelBase):
@@ -419,8 +502,49 @@ def ensure_users_tier_column(engine) -> None:
     except Exception as e:
         print(f"Warning: could not ensure users.tier column: {e}")
 
+
+def ensure_food_logs_columns(engine) -> None:
+    """Add new columns used by Scan Food edit UI (safe no-op if present)."""
+    try:
+        dialect = (engine.dialect.name or "").lower()
+        if dialect.startswith("postgres"):
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS food_name VARCHAR(200);"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS calories DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS protein_g DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS carbs_g DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS fat_g DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS serving_size_g DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS source VARCHAR(50);"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS fingerprint VARCHAR(64);"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS raw_text VARCHAR(2000);"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS alternatives_json VARCHAR(2000);"))
+                conn.execute(text("ALTER TABLE IF EXISTS food_logs ADD COLUMN IF NOT EXISTS notes VARCHAR(500);"))
+        elif dialect.startswith("sqlite"):
+            with engine.begin() as conn:
+                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(food_logs);")).fetchall()]
+                def add(col_sql: str, col_name: str):
+                    if col_name not in cols:
+                        conn.execute(text(f"ALTER TABLE food_logs ADD COLUMN {col_sql};"))
+                add("food_name VARCHAR(200)", "food_name")
+                add("calories REAL", "calories")
+                add("protein_g REAL", "protein_g")
+                add("carbs_g REAL", "carbs_g")
+                add("fat_g REAL", "fat_g")
+                add("serving_size_g REAL", "serving_size_g")
+                add("source VARCHAR(50)", "source")
+                add("confidence REAL", "confidence")
+                add("fingerprint VARCHAR(64)", "fingerprint")
+                add("raw_text VARCHAR(2000)", "raw_text")
+                add("alternatives_json VARCHAR(2000)", "alternatives_json")
+                add("notes VARCHAR(500)", "notes")
+    except Exception as e:
+        print(f"Warning: could not ensure food_logs columns: {e}")
+
 ModelBase.metadata.create_all(engine)
 ensure_users_tier_column(engine)
+ensure_food_logs_columns(engine)
 
 # -----------------------------------------------------------------------------
 # Register USDA Nutrition API Routes
@@ -659,6 +783,75 @@ DEFAULT_PEPTIDES: list[tuple[str, str]] = [
     ("Epithalon", "Epitalon / Epithalon"),
     ("Thymalin", "Thymalin"),
 ]
+
+# -----------------------------------------------------------------------------
+# Scan Peptides: normalization + ranking helpers (handwriting-friendly)
+# -----------------------------------------------------------------------------
+TOP_PEPTIDES: list[str] = [
+    "BPC-157",
+    "TB-500",
+    "GHK-Cu",
+    "DSIP",
+    "MT-2",
+    "PT-141",
+    "Retatrutide",
+    "Tirzepatide",
+    "Semaglutide",
+    "Semax",
+    "Selank",
+]
+
+def _norm_pep(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = s.replace("_", "-").replace("—", "-").replace("–", "-")
+    s = re.sub(r"\s+", " ", s)
+
+    # common alias fixes
+    s = s.replace("bpc 157", "bpc-157").replace("bpc157", "bpc-157")
+    s = s.replace("tb500", "tb-500").replace("tb 500", "tb-500").replace("tb-500", "tb-500")
+    s = s.replace("pt141", "pt-141").replace("pt 141", "pt-141")
+    s = s.replace("mt2", "mt-2").replace("mt 2", "mt-2")
+    s = s.replace("ghk cu", "ghk-cu").replace("ghk-cu", "ghk-cu")
+    s = s.replace("semiglutide", "semaglutide")  # common misspelling
+    return s
+
+def _fuzzy_ratio(a: str, b: str) -> float:
+    # fast and dependency-free
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a, b).ratio()
+
+def _best_peptide_matches(raw_candidates: list[str], peptide_names: list[str], limit: int = 5) -> list[dict]:
+    """Rank peptide matches from model output against known peptide names."""
+    # library = DB peptides + user's top peptides (dedup, preserve order)
+    lib = []
+    seen = set()
+    for p in (peptide_names or []) + TOP_PEPTIDES:
+        if not p:
+            continue
+        key = p.strip()
+        if key and key not in seen:
+            seen.add(key)
+            lib.append(key)
+
+    lib_norm = [(p, _norm_pep(p)) for p in lib]
+    scored: dict[str, float] = {}
+
+    for cand in raw_candidates or []:
+        cn = _norm_pep(cand)
+        if not cn:
+            continue
+        for p, pn in lib_norm:
+            r = _fuzzy_ratio(cn, pn)
+            if r >= 0.55:
+                scored[p] = max(scored.get(p, 0.0), r)
+
+    # boost top peptides slightly
+    for p in TOP_PEPTIDES:
+        if p in scored:
+            scored[p] = min(1.0, scored[p] + 0.08)
+
+    out = [{"name": k, "confidence": float(v)} for k, v in sorted(scored.items(), key=lambda x: x[1], reverse=True)]
+    return out[:limit]
 
 def _seed_peptides_if_empty(pdb) -> None:
     """Seed a baseline peptide list on fresh databases.
@@ -919,9 +1112,13 @@ def api_food_photo_identify():
     if not f.filename:
         return jsonify({"ok": False, "error": "Empty filename"}), 400
 
-    data = f.read()
-    if not data:
+    raw = f.read()
+    if not raw:
         return jsonify({"ok": False, "error": "Empty file"}), 400
+
+    # Preprocess to improve OCR/handwriting and fix iPhone rotation
+    data = _preprocess_for_vision(raw)
+    fingerprint = _fingerprint_bytes(data)
 
     mime = f.mimetype or "image/jpeg"
     img_b64 = base64.b64encode(data).decode("utf-8")
@@ -936,12 +1133,28 @@ def api_food_photo_identify():
     alternatives = ident.get("alternatives") or []
     notes = ident.get("notes") or ""
 
+    # If user has previously corrected this exact image/label, reuse it
+    try:
+        u = get_current_user()
+        if u:
+            db = get_session(db_url)
+            try:
+                corr = db.query(ScanCorrection).filter_by(user_id=u.id, scan_type="food", fingerprint=fingerprint).first()
+                if corr and corr.corrected:
+                    name = corr.corrected.strip()
+                    notes = (notes + " (used saved correction)").strip()
+                    confidence = 0.99
+            finally:
+                db.close()
+    except Exception:
+        pass
+
     if not name:
         return jsonify({"ok": False, "error": "Could not identify food"}), 500
 
     # 2) Lookup macros
     # If a nutrition label is readable, prefer label-derived macros (helps differentiate diet/zero variants).
-    nutrition = ai.get("nutrition") if isinstance(ai, dict) else None
+    nutrition = ident.get("nutrition") if isinstance(ident, dict) else None
     macros = None
     if nutrition and isinstance(nutrition, dict):
         try:
@@ -967,10 +1180,13 @@ def api_food_photo_identify():
         out = {
             "ok": True,
             "name": name,
+            "food_name": name,
             "item": name,  # compatibility with older templates
             "confidence": confidence,
             "alternatives": alternatives,
             "notes": notes,
+            "fingerprint": fingerprint,
+            "macros": {"source": None},
             "macro_error": macros.get("error"),
         }
         return jsonify(out), 200
@@ -978,10 +1194,12 @@ def api_food_photo_identify():
     out = {
         "ok": True,
         "name": name,
+        "food_name": name,
         "item": name,
         "confidence": confidence,
         "alternatives": alternatives,
         "notes": notes,
+        "fingerprint": fingerprint,
         "calories": macros.get("calories"),
         "protein": macros.get("protein"),
         "carbs": macros.get("carbs"),
@@ -989,6 +1207,15 @@ def api_food_photo_identify():
         "serving_size_g": macros.get("serving_size_g"),
         "matched_description": macros.get("matched_description"),
         "source": macros.get("source"),
+        # structure expected by scan_food.html
+        "macros": {
+            "calories": macros.get("calories") or 0,
+            "protein": macros.get("protein") or 0,
+            "carbs": macros.get("carbs") or 0,
+            "fat": macros.get("fat") or 0,
+            "fiber": 0,
+            "source": macros.get("source") or "usda",
+        },
     }
 
     # 3) Optional auto-save (default ON for scanner)
@@ -1006,6 +1233,20 @@ def api_food_photo_identify():
                         total_protein_g=out.get("protein") or 0,
                         total_fat_g=out.get("fat") or 0,
                         total_carbs_g=out.get("carbs") or 0,
+
+                        food_name=name,
+                        calories=out.get("calories"),
+                        protein_g=out.get("protein"),
+                        carbs_g=out.get("carbs"),
+                        fat_g=out.get("fat"),
+                        serving_size_g=out.get("serving_size_g"),
+                        source=out.get("source"),
+                        confidence=float(confidence) if confidence is not None else None,
+                        fingerprint=fingerprint,
+                        raw_text=(ident.get("raw") or ident.get("text") or "")[:2000] if isinstance(ident, dict) else None,
+                        alternatives_json=json.dumps(alternatives)[:2000] if alternatives else None,
+                        notes=(notes or "")[:500] if notes else None,
+
                         raw_data=json.dumps({"ident": ident, "macros": macros})[:5000],
                     )
                     db.add(food_log)
@@ -1052,10 +1293,10 @@ def scan_nutrition():
 @login_required
 def api_update_food_log(food_log_id: int):
     """Allow users to correct/override macros after scan."""
-    data = request.get_json(silent=True) or {}
-    log = FoodLog.query.filter_by(id=food_log_id, user_id=current_user.id).first()
-    if not log:
-        return jsonify({"error": "Not found"}), 404
+    payload = request.get_json(silent=True) or {}
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
 
     def _f(x):
         try:
@@ -1063,39 +1304,94 @@ def api_update_food_log(food_log_id: int):
         except Exception:
             return None
 
-    # Allow updating name + macros
-    name = (data.get("food_name") or data.get("name") or "").strip()
-    if name:
-        log.food_name = name[:200]
+    db = get_session(db_url)
+    try:
+        log = db.query(FoodLog).filter_by(id=food_log_id, user_id=user.id).first()
+        if not log:
+            return jsonify({"error": "Not found"}), 404
 
-    calories = _f(data.get("calories"))
-    protein = _f(data.get("protein"))
-    carbs = _f(data.get("carbs"))
-    fat = _f(data.get("fat"))
+        name = (payload.get("food_name") or payload.get("name") or "").strip()
+        if name:
+            log.food_name = name[:200]
+            log.description = name[:500]
 
-    # Only update fields that are provided (not None)
-    if calories is not None:
-        log.calories = calories
-    if protein is not None:
-        log.protein_g = protein
-    if carbs is not None:
-        log.carbs_g = carbs
-    if fat is not None:
-        log.fat_g = fat
+        calories = _f(payload.get("calories"))
+        protein = _f(payload.get("protein"))
+        carbs = _f(payload.get("carbs"))
+        fat = _f(payload.get("fat"))
 
-    log.source = (data.get("source") or log.source or "manual_edit")[:50]
+        # Update normalized fields
+        if calories is not None:
+            log.calories = calories
+            log.total_calories = calories
+        if protein is not None:
+            log.protein_g = protein
+            log.total_protein_g = protein
+        if carbs is not None:
+            log.carbs_g = carbs
+            log.total_carbs_g = carbs
+        if fat is not None:
+            log.fat_g = fat
+            log.total_fat_g = fat
 
-    db.session.commit()
-    return jsonify({
-        "success": True,
-        "food_log_id": log.id,
-        "food_name": log.food_name,
-        "calories": log.calories,
-        "protein": log.protein_g,
-        "carbs": log.carbs_g,
-        "fat": log.fat_g,
-        "source": log.source,
-    })
+        log.source = (payload.get("source") or log.source or "manual_edit")[:50]
+
+        db.commit()
+        return jsonify({
+            "success": True,
+            "food_log_id": log.id,
+            "food_name": log.food_name or log.description,
+            "calories": log.calories if log.calories is not None else log.total_calories,
+            "protein": log.protein_g if log.protein_g is not None else log.total_protein_g,
+            "carbs": log.carbs_g if log.carbs_g is not None else log.total_carbs_g,
+            "fat": log.fat_g if log.fat_g is not None else log.total_fat_g,
+            "source": log.source,
+        })
+    finally:
+        db.close()
+
+@app.post("/api/scan-correction")
+@login_required
+def api_scan_correction():
+    """Store a per-user correction so future scans get it right instantly."""
+    payload = request.get_json(silent=True) or {}
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    scan_type = (payload.get("scan_type") or "").strip()
+    fingerprint = (payload.get("fingerprint") or "").strip()
+    corrected = (payload.get("corrected") or "").strip()
+    original = (payload.get("original") or "").strip()
+
+    if scan_type not in ("peptide", "food"):
+        return jsonify({"error": "invalid scan_type"}), 400
+    if not fingerprint or not corrected:
+        return jsonify({"error": "fingerprint and corrected required"}), 400
+
+    db = get_session(db_url)
+    try:
+        row = db.query(ScanCorrection).filter_by(
+            user_id=user.id,
+            scan_type=scan_type,
+            fingerprint=fingerprint
+        ).first()
+        if row:
+            row.corrected = corrected[:200]
+            row.original = original[:400]
+        else:
+            row = ScanCorrection(
+                user_id=user.id,
+                scan_type=scan_type,
+                fingerprint=fingerprint,
+                corrected=corrected[:200],
+                original=original[:400] if original else None,
+            )
+            db.add(row)
+        db.commit()
+        return jsonify({"success": True})
+    finally:
+        db.close()
 
 @app.route("/scan-peptides", methods=["GET"])
 @login_required
@@ -1113,38 +1409,58 @@ def api_scan_peptide_label():
         return jsonify({"error": "No image uploaded"}), 400
 
     f = request.files["image"]
-    data = f.read()
-    if not data:
+    raw = f.read()
+    if not raw:
         return jsonify({"error": "Empty file"}), 400
+
+    data = _preprocess_for_vision(raw)
+    fingerprint = _fingerprint_bytes(data)
 
     mime = f.mimetype or "image/jpeg"
     img_b64 = base64.b64encode(data).decode("utf-8")
 
     peptides = _load_peptides_list()
-    peptide_names = [p.get("name", "") for p in peptides if p.get("name")]
+    peptide_names = [p.get("name", "") for p in peptides if isinstance(p, dict) and p.get("name")]
+
+    # If user already corrected this exact label, return it immediately
+    user = get_current_user()
+    if user:
+        db = get_session(db_url)
+        try:
+            corr = db.query(ScanCorrection).filter_by(user_id=user.id, scan_type="peptide", fingerprint=fingerprint).first()
+            if corr and corr.corrected:
+                return jsonify({
+                    "fingerprint": fingerprint,
+                    "raw_text": corr.original or "",
+                    "matches": [{"name": corr.corrected, "confidence": 0.99}],
+                    "notes": "used saved correction"
+                }), 200
+        finally:
+            db.close()
 
     result = _openai_scan_peptide_label(img_b64, peptide_names=peptide_names, mime_type=mime)
     if "error" in result:
         return jsonify(result), 500
 
-    # Normalize to what the template expects
-    matches = result.get("matches") or []
-    # Ensure each match has name/confidence
-    cleaned = []
-    for m in matches[:5]:
-        nm = (m.get("name") or "").strip()
-        if not nm:
-            continue
-        conf = m.get("confidence")
-        try:
-            conf = float(conf) if conf is not None else None
-        except Exception:
-            conf = None
-        cleaned.append({"name": nm, "confidence": conf})
+    raw_text = (result.get("text") or result.get("raw_text") or "").strip()
+    candidates = []
+    for k in ("peptides", "candidates"):
+        v = result.get(k)
+        if isinstance(v, list):
+            candidates.extend([str(x) for x in v if x])
+    if raw_text:
+        # pull obvious tokens like "TB500", "BPC 157" etc
+        tokens = re.findall(r"[A-Za-z0-9\-\+]{2,}", raw_text)
+        candidates.extend(tokens)
+
+    # Rank against known peptide list
+    matches = _best_peptide_matches(candidates, peptide_names, limit=5)
+
     out = {
-        "raw_text": result.get("raw_text") or "",
-        "matches": cleaned,
-        "notes": result.get("notes") or "",
+        "fingerprint": fingerprint,
+        "raw_text": raw_text,
+        "matches": matches,
+        "notes": (result.get("notes") or "").strip(),
     }
     return jsonify(out), 200
 
@@ -1153,9 +1469,12 @@ def api_scan_peptide_label():
 @app.post("/api/save-scanned-peptide")
 @login_required
 def api_save_scanned_peptide():
-    """Create a vial from a scan result so user doesn't have to type."""
-    data = request.get_json(silent=True) or {}
-    peptide_name = (data.get("peptide_name") or data.get("name") or "").strip()
+    """Create a vial from a scan result so user doesn't have to type.
+
+    Uses the existing PeptideDB helper (same mechanism as /add-vial).
+    """
+    payload = request.get_json(silent=True) or {}
+    peptide_name = (payload.get("peptide_name") or payload.get("name") or "").strip()
     if not peptide_name:
         return jsonify({"error": "peptide_name required"}), 400
 
@@ -1165,33 +1484,79 @@ def api_save_scanned_peptide():
         except Exception:
             return None
 
-    vial_size_mg = _f(data.get("vial_size_mg"))
-    if vial_size_mg is None:
-        vial_size_mg = 0.0
+    vial_size_mg = _f(payload.get("vial_size_mg")) or 0.0
+    bac_water_ml = _f(payload.get("bac_water_ml"))
+    notes = (payload.get("notes") or payload.get("raw_text") or "")[:300]
 
-    peptide = Peptide.query.filter(Peptide.name.ilike(peptide_name)).first()
-    if not peptide:
-        peptide = Peptide(name=peptide_name)
-        db.session.add(peptide)
-        db.session.flush()
+    # Find peptide_id by name (case-insensitive) using PeptideDB list
+    try:
+        from database import PeptideDB  # type: ignore
+    except Exception as e:
+        return jsonify({"error": f"Database helper not available: {e}"}), 500
 
-    vial = Vial(
-        user_id=current_user.id,
-        peptide_id=peptide.id,
-        vial_size_mg=vial_size_mg,
-        bac_water_ml=_f(data.get("bac_water_ml") or 0.0),
-        notes=(data.get("notes") or data.get("raw_text") or "")[:300],
-        received_date=date.today(),
-    )
-    db.session.add(vial)
-    db.session.commit()
+    db = get_session(db_url)
+    try:
+        pdb = PeptideDB(db)
+        _seed_peptides_if_empty(pdb)
 
-    return jsonify({
-        "success": True,
-        "vial_id": vial.id,
-        "peptide_name": peptide.name,
-        "vial_size_mg": vial.vial_size_mg,
-    })
+        peptides = getattr(pdb, "list_peptides", lambda: [])()
+        peptide_id = None
+        for p in peptides or []:
+            try:
+                if (p.get("name") or "").strip().lower() == peptide_name.lower():
+                    peptide_id = int(p.get("id"))
+                    break
+            except Exception:
+                continue
+
+        if peptide_id is None:
+            add_pep = getattr(pdb, "add_peptide", None)
+            if callable(add_pep):
+                add_pep(name=peptide_name, common_name=None)
+                db.commit()
+                peptides = getattr(pdb, "list_peptides", lambda: [])()
+                for p in peptides or []:
+                    if (p.get("name") or "").strip().lower() == peptide_name.lower():
+                        peptide_id = int(p.get("id"))
+                        break
+
+        if peptide_id is None:
+            return jsonify({"error": "Could not find or create peptide"}), 500
+
+        add_vial = getattr(pdb, "add_vial", None)
+        if not callable(add_vial):
+            return jsonify({"error": "Database helper does not implement add_vial()"}), 500
+
+        add_vial(
+            peptide_id=peptide_id,
+            mg_amount=float(vial_size_mg),
+            bacteriostatic_water_ml=bac_water_ml,
+            purchase_date=datetime.utcnow(),
+            reconstitution_date=datetime.utcnow(),
+            lot_number=None,
+            vendor=None,
+            cost=None,
+            notes=notes or None,
+        )
+        db.commit()
+
+        # Best-effort: return the latest vial id if helper exposes it
+        vial_id = None
+        try:
+            vials = getattr(pdb, "list_vials", lambda user_id=None: [])()
+            if vials:
+                vial_id = vials[-1].get("id")
+        except Exception:
+            pass
+
+        return jsonify({
+            "success": True,
+            "vial_id": vial_id,
+            "peptide_name": peptide_name,
+            "vial_size_mg": vial_size_mg,
+        })
+    finally:
+        db.close()
 
 @app.route("/")
 def index():

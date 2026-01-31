@@ -445,6 +445,7 @@
 
     // State
     let currentMatches = [];
+    let lastFingerprint = null;
 
     // Show status
     function showStatus(message, type = 'loading') {
@@ -574,6 +575,7 @@
 
         // Display extracted text
         ocrText.value = data.raw_text || data.text || '';
+        lastFingerprint = data.fingerprint || null;
 
         // Display matches
         const matches = data.matches || [];
@@ -612,6 +614,26 @@
           raw_text: ocrText.value || '',
           notes: `Scanned from label`
         };
+
+        // Save correction so this exact label is recognized next time
+        try {
+          const remember = document.getElementById('rememberPeptide');
+          if (remember && remember.checked && lastFingerprint) {
+            await fetch('/api/scan-correction', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                scan_type: 'peptide',
+                fingerprint: lastFingerprint,
+                corrected: peptideName,
+                original: (ocrText.value || '').slice(0, 350)
+              })
+            });
+          }
+        } catch (e) {
+          console.warn('Could not save correction:', e);
+        }
+
 
         const response = await fetch('/api/save-scanned-peptide', {
           method: 'POST',
