@@ -52,7 +52,7 @@
                 <label for="fileInput" class="btn btn-outline-primary flex-grow-1 mb-0">
                     <i class="bi bi-upload"></i> Upload Photo
                 </label>
-                <input type="file" id="fileInput" accept="image/*" style="display: none;" />
+                <input type="file" id="fileInput" accept="image/*" capture="environment" style="display: none;" />
             </div>
 
             <!-- Loading Indicator -->
@@ -207,10 +207,11 @@ let baseMacros = null;
 // Start camera
 async function startCamera() {
     try {
-        cameraStream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } 
+        // Prefer rear camera on mobile; fall back gracefully if constraints fail.
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
         });
-        
+
         cameraVideo.srcObject = cameraStream;
         cameraPlaceholder.style.display = 'none';
         cameraVideo.style.display = 'block';
@@ -218,23 +219,24 @@ async function startCamera() {
         btnCapture.style.display = 'block';
     } catch (error) {
         console.error('Camera error:', error);
+        // Fallback: some iOS browsers reject facingMode/ideal constraints.
+        try {
+            cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+            cameraVideo.srcObject = cameraStream;
+            cameraPlaceholder.style.display = 'none';
+            cameraVideo.style.display = 'block';
+            btnStartCamera.style.display = 'none';
+            btnCapture.style.display = 'block';
+            return;
+        } catch (e2) {
+            console.error('Camera fallback error:', e2);
+        }
+
         alert('Could not access camera. Please check permissions or use photo upload instead.');
     }
 }
 
 btnStartCamera.addEventListener('click', startCamera);
-
-// Start camera
-cameraVideo.srcObject = cameraStream;
-        cameraPlaceholder.style.display = 'none';
-        cameraVideo.style.display = 'block';
-        btnStartCamera.style.display = 'none';
-        btnCapture.style.display = 'block';
-    } catch (error) {
-        console.error('Camera error:', error);
-        alert('Could not access camera. Please check permissions or use photo upload instead.');
-    }
-});
 
 // Capture photo
 btnCapture.addEventListener('click', () => {

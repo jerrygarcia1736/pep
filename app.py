@@ -323,23 +323,10 @@ def tier_at_least(tier: str, minimum: str) -> bool:
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
+        # Auth only. Onboarding/profile are optional and must never block core features.
         if "user_id" not in session:
             flash("Please log in.", "warning")
             return redirect(url_for("login"))
-        
-        # Check if user has completed profile.
-        # Since profile setup is now integrated into the dashboard, we allow the dashboard
-        # to load even if the profile is incomplete, and we redirect other protected pages
-        # back to the dashboard until the profile is completed.
-        if f.__name__ not in ("profile_setup", "dashboard", "chat", "api_chat"):
-            db = get_session(db_url)
-            try:
-                profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
-                if not profile or not profile.completed_at:
-                    return redirect(url_for("dashboard"))
-            finally:
-                db.close()
-        
         return f(*args, **kwargs)
     return wrapper
 
@@ -1182,6 +1169,14 @@ def profile_setup():
             action = request.form.get("action", "save")
             
             if action == "skip":
+                # Mark profile as "completed" to avoid any future redirects/loops.
+                if profile:
+                    profile.completed_at = datetime.utcnow()
+                    profile.updated_at = datetime.utcnow()
+                else:
+                    profile = UserProfile(user_id=session["user_id"], completed_at=datetime.utcnow())
+                    db.add(profile)
+                db.commit()
                 flash("Profile setup skipped. You can complete it anytime from settings!", "info")
                 return redirect(url_for("dashboard"))
             
@@ -1254,7 +1249,19 @@ def get_user_profile(user_id):
 @app.route("/profile-setup/skip", methods=["GET", "POST"])
 @login_required
 def profile_setup_skip():
-    """Direct skip route - allows skipping profile setup"""
+    """Direct skip route - mark profile as completed so it never blocks anything."""
+    db = get_session(db_url)
+    try:
+        profile = db.query(UserProfile).filter_by(user_id=session["user_id"]).first()
+        if profile:
+            profile.completed_at = profile.completed_at or datetime.utcnow()
+            profile.updated_at = datetime.utcnow()
+        else:
+            profile = UserProfile(user_id=session["user_id"], completed_at=datetime.utcnow())
+            db.add(profile)
+        db.commit()
+    finally:
+        db.close()
     flash("Profile setup skipped. You can complete it anytime from settings!", "info")
     return redirect(url_for("dashboard"))
 
