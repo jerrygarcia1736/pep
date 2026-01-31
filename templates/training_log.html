@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Training Log{% endblock %}
+{% block content %}
+<div class="container" style="max-width:980px">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div class="d-flex align-items-center gap-2">
+      <div style="font-size:28px">📈</div>
+      <div>
+        <h1 class="h3 mb-0">Training Log</h1>
+        <div class="text-muted small">Your most recent workout entries.</div>
+      </div>
+    </div>
+    <a class="btn btn-primary" href="/scan-equipment?autocam=1"><i class="bi bi-camera"></i> Scan Training</a>
+  </div>
+
+  <div class="card border-0 shadow-sm">
+    <div class="card-body">
+      {% if rows and rows|length %}
+        <div class="table-responsive">
+          <table class="table align-middle mb-0">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Category</th>
+                <th>Exercise</th>
+                <th class="text-end">Sets</th>
+                <th class="text-end">Reps</th>
+                <th class="text-end">Weight</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in rows %}
+                <tr>
+                  <td class="small text-muted">{{ r.performed_at.strftime("%b %d, %Y %I:%M %p") if r.performed_at else "" }}</td>
+                  <td>
+                    <span class="badge bg-secondary-subtle text-secondary">
+                      {{ r.equipment_category }}
+                    </span>
+                  </td>
+                  <td>{{ r.exercise_name or "" }}</td>
+                  <td class="text-end">{{ r.sets or "" }}</td>
+                  <td class="text-end">{{ r.reps or "" }}</td>
+                  <td class="text-end">{{ r.weight or "" }}</td>
+                  <td class="small text-muted">{{ r.notes or "" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="text-muted">No training entries yet. Start by scanning a machine and logging a set.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

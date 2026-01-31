@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Scan Training{% endblock %}
+{% block content %}
+<div class="container" style="max-width:860px">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <div style="font-size:28px">🏋️</div>
+    <div>
+      <h1 class="h3 mb-0">Scan Training</h1>
+      <div class="text-muted small">Point your camera at a gym machine. We’ll suggest a category (Strength / Cables / Free weights / Cardio).</div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-lg-7">
+      <div class="card border-0 shadow-sm">
+        <div class="card-body">
+          <div class="ratio ratio-4x3 bg-dark rounded overflow-hidden">
+            <video id="video" autoplay playsinline muted style="width:100%; height:100%; object-fit:cover;"></video>
+          </div>
+
+          <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-primary" id="btnStart"><i class="bi bi-camera-video"></i> Start Camera</button>
+            <button class="btn btn-success" id="btnSnap"><i class="bi bi-camera"></i> Capture</button>
+            <button class="btn btn-outline-secondary" id="btnRetry" style="display:none"><i class="bi bi-arrow-repeat"></i> Retry</button>
+          </div>
+
+          <canvas id="canvas" style="display:none"></canvas>
+
+          <div class="mt-3" id="status" style="display:none">
+            <div class="alert alert-info mb-0">
+              <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+              Analyzing equipment…
+            </div>
+          </div>
+
+          <div class="mt-3" id="result" style="display:none">
+            <div class="card border-0 bg-light">
+              <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between">
+                  <div>
+                    <div class="fw-semibold">Suggested category</div>
+                    <div class="small text-muted" id="notes"></div>
+                  </div>
+                  <span class="badge bg-primary-subtle text-primary" id="confidence"></span>
+                </div>
+
+                <div class="mt-3">
+                  <label class="form-label">Equipment category</label>
+                  <select class="form-select" id="equipment_category">
+                    {% for c in categories %}
+                      <option value="{{ c.key }}">{{ c.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <div class="form-text">If we guessed wrong, just pick the right one — this also helps the model improve.</div>
+                </div>
+
+                <form method="post" action="{{ url_for('log_workout') }}" class="mt-3" id="logForm">
+                  <input type="hidden" name="equipment_category" id="equipment_category_hidden" value="other">
+
+                  <div class="row g-2">
+                    <div class="col-12 col-md-6">
+                      <label class="form-label">Exercise name (optional)</label>
+                      <input class="form-control" name="exercise_name" placeholder="e.g., Leg press">
+                    </div>
+                    <div class="col-4 col-md-2">
+                      <label class="form-label">Sets</label>
+                      <input class="form-control" name="sets" inputmode="numeric" placeholder="3">
+                    </div>
+                    <div class="col-4 col-md-2">
+                      <label class="form-label">Reps</label>
+                      <input class="form-control" name="reps" inputmode="numeric" placeholder="10">
+                    </div>
+                    <div class="col-4 col-md-2">
+                      <label class="form-label">Weight</label>
+                      <input class="form-control" name="weight" inputmode="decimal" placeholder="180">
+                    </div>
+                  </div>
+
+                  <div class="mt-2">
+                    <label class="form-label">Notes (optional)</label>
+                    <input class="form-control" name="notes" placeholder="e.g., last set to failure">
+                  </div>
+
+                  <div class="d-flex gap-2 mt-3">
+                    <button class="btn btn-primary" type="submit"><i class="bi bi-check2-circle"></i> Save workout</button>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('training_log') }}"><i class="bi bi-list"></i> View training log</a>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-5">
+      <div class="card border-0 shadow-sm">
+        <div class="card-body">
+          <div class="fw-semibold mb-2">Tips for better recognition</div>
+          <ul class="small text-muted mb-0">
+            <li>Fill the frame with the machine (logo/structure helps).</li>
+            <li>Try a slight angle so the machine shape is visible.</li>
+            <li>Avoid backlighting when possible.</li>
+            <li>If we’re wrong, correct it — that improves future accuracy.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card border-0 shadow-sm mt-3">
+        <div class="card-body">
+          <div class="fw-semibold mb-2">This phase focus</div>
+          <div class="small text-muted">
+            We’re doing <b>category detection</b> first (fast + reliable). Specific machines and exercise suggestions come later once we have real-world images.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const btnStart = document.getElementById('btnStart');
+  const btnSnap = document.getElementById('btnSnap');
+  const btnRetry = document.getElementById('btnRetry');
+  const statusEl = document.getElementById('status');
+  const resultEl = document.getElementById('result');
+  const notesEl = document.getElementById('notes');
+  const confEl = document.getElementById('confidence');
+  const sel = document.getElementById('equipment_category');
+  const hidden = document.getElementById('equipment_category_hidden');
+
+  let stream = null;
+
+  async function startCamera() {
+    if (stream) return;
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+  }
+
+  function stopCamera() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+
+  function show(el) { el.style.display = ''; }
+  function hide(el) { el.style.display = 'none'; }
+
+  btnStart.addEventListener('click', async () => {
+    try {
+      await startCamera();
+    } catch (e) {
+      alert("Could not start camera. Make sure camera permissions are allowed.");
+      console.error(e);
+    }
+  });
+
+  btnSnap.addEventListener('click', async () => {
+    try {
+      if (!stream) await startCamera();
+      hide(resultEl);
+      show(statusEl);
+
+      const w = video.videoWidth || 1024;
+      const h = video.videoHeight || 768;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, w, h);
+
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+      const fd = new FormData();
+      fd.append('image', blob, 'equipment.jpg');
+
+      const r = await fetch("{{ url_for('api_scan_equipment') }}", { method: 'POST', body: fd });
+      const j = await r.json();
+
+      hide(statusEl);
+
+      if (!r.ok) {
+        alert(j.error || "Scan failed");
+        show(btnRetry);
+        return;
+      }
+
+      // set selection
+      const cat = j.category || "other";
+      sel.value = cat;
+      hidden.value = cat;
+      confEl.textContent = Math.round((j.confidence || 0) * 100) + "%";
+      notesEl.textContent = j.notes || "";
+
+      show(resultEl);
+      show(btnRetry);
+      stopCamera(); // release camera after capture (mobile-friendly)
+    } catch (e) {
+      hide(statusEl);
+      alert("Scan failed. Please try again.");
+      console.error(e);
+      show(btnRetry);
+    }
+  });
+
+  btnRetry.addEventListener('click', () => {
+    hide(resultEl);
+    hide(statusEl);
+    hidden.value = sel.value || "other";
+    // optionally restart camera
+  });
+
+  sel.addEventListener('change', () => {
+    hidden.value = sel.value || "other";
+  });
+
+  // Autostart camera if requested
+  const autocam = {{ 1 if autocam else 0 }};
+  if (autocam) {
+    startCamera().catch(()=>{});
+  }
+})();
+</script>
+{% endblock %}

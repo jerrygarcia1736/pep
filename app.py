@@ -170,6 +170,124 @@ Rules:
 
 
 # -----------------------------------------------------------------------------
+# Equipment / gym scan helper (category-level MVP)
+# -----------------------------------------------------------------------------
+_EQUIPMENT_CATEGORIES = [
+    {"key": "machine_strength", "label": "Strength Machine"},
+    {"key": "cables", "label": "Cable Machine"},
+    {"key": "free_weights", "label": "Free Weights"},
+    {"key": "cardio", "label": "Cardio"},
+    {"key": "other", "label": "Other / Unknown"},
+]
+
+def _coerce_equipment_category(cat: str | None) -> str:
+    if not cat:
+        return "other"
+    cat = str(cat).strip().lower()
+    allowed = {c["key"] for c in _EQUIPMENT_CATEGORIES}
+    # common aliases
+    aliases = {
+        "machine": "machine_strength",
+        "strength_machine": "machine_strength",
+        "strength": "machine_strength",
+        "cable": "cables",
+        "cable_machine": "cables",
+        "freeweight": "free_weights",
+        "free weight": "free_weights",
+        "weights": "free_weights",
+        "dumbbells": "free_weights",
+        "barbell": "free_weights",
+        "treadmill": "cardio",
+        "bike": "cardio",
+        "elliptical": "cardio",
+    }
+    cat = aliases.get(cat, cat)
+    return cat if cat in allowed else "other"
+
+def _openai_identify_equipment_from_image(image_b64: str, mime_type: str = "image/jpeg") -> dict:
+    """Identify gym equipment category from an image using OpenAI Responses API.
+
+    Returns dict: {category, confidence, alternatives, notes}
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not set"}
+
+    model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4.1-mini")
+    data_url = f"data:{mime_type};base64,{image_b64}"
+
+    allowed = [c["key"] for c in _EQUIPMENT_CATEGORIES]
+    prompt = f"""
+You are a gym equipment classifier. Analyze the photo and return ONLY strict JSON.
+
+Goal: classify the equipment into ONE category from this allowed list:
+{allowed}
+
+Return JSON with this exact schema:
+{{
+  "category": string,        # one of the allowed list
+  "confidence": number,      # 0-1
+  "alternatives": [string],  # up to 3 from the allowed list (excluding category)
+  "notes": string            # short notes about what you saw
+}}
+
+Rules:
+- If uncertain, choose "other" with low confidence.
+- Do not guess specific exercise names.
+- No markdown, no extra text.
+""".strip()
+
+    payload = {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+    }
+
+    r = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=45,
+    )
+    if r.status_code >= 400:
+        return {"error": f"OpenAI API error {r.status_code}", "details": r.text[:2000]}
+
+    try:
+        data = r.json()
+        out = data.get("output", [])
+        txt = ""
+        for item in out:
+            for c in item.get("content", []) or []:
+                if c.get("type") == "output_text":
+                    txt += c.get("text", "")
+        txt = (txt or "").strip()
+        j = json.loads(txt)
+        cat = _coerce_equipment_category(j.get("category"))
+        conf = float(j.get("confidence") or 0)
+        alts_raw = j.get("alternatives") or []
+        alts = []
+        for a in alts_raw[:3]:
+            a2 = _coerce_equipment_category(a)
+            if a2 != cat and a2 not in alts:
+                alts.append(a2)
+        return {
+            "category": cat,
+            "confidence": max(0.0, min(1.0, conf)),
+            "alternatives": alts,
+            "notes": (j.get("notes") or "")[:300],
+        }
+    except Exception:
+        return {"error": "Failed to parse OpenAI response", "details": r.text[:2000]}
+
+
+# -----------------------------------------------------------------------------
 # USDA macro lookup helper (FoodData Central)
 # -----------------------------------------------------------------------------
 def _usda_lookup_macros(food_query: str) -> dict:
@@ -312,7 +430,31 @@ Rules:
         for c in item.get("content", []) or []:
             if c.get("type") in ("output_text", "text"):
                 text_parts.append(c.get("text", ""))
-    out_text = "\n".join([t for t in text_parts if t]).strip() or (resp.get("output_text") or "").strip()
+    out_text = "\n".join([t for t in text_parts if t]).stclass EquipmentScan(ModelBase):
+    __tablename__ = "equipment_scans"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    image_sha = Column(String(64), nullable=True, index=True)
+    predicted_category = Column(String(50), nullable=True)
+    confidence = Column(Float, nullable=True)
+    alternatives_json = Column(String(500), nullable=True)
+    notes = Column(String(300), nullable=True)
+    corrected_category = Column(String(50), nullable=True)
+
+class WorkoutLog(ModelBase):
+    __tablename__ = "workout_logs"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    performed_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    equipment_category = Column(String(50), nullable=False, index=True)
+    exercise_name = Column(String(120), nullable=True)
+    sets = Column(Integer, nullable=True)
+    reps = Column(Integer, nullable=True)
+    weight = Column(Float, nullable=True)
+    notes = Column(String(300), nullable=True)
+
+rip() or (resp.get("output_text") or "").strip()
     if not out_text:
         return {"error": "No text returned from model"}
 
@@ -1427,6 +1569,136 @@ def scan_peptides():
     return render_template("scan_peptides.html", autocam=autocam, all_peptides=all_peptides)
 
 
+
+@app.route("/scan-equipment", methods=["GET"])
+@login_required
+def scan_equipment():
+    """Phase 1.5: native-camera gym equipment scan UI (category-level MVP)."""
+    autocam = request.args.get("autocam") == "1"
+    return render_template("scan_equipment.html", autocam=autocam, categories=_EQUIPMENT_CATEGORIES)
+
+@app.route("/api/scan-equipment", methods=["POST"])
+@login_required
+def api_scan_equipment():
+    """Accept an image and return an equipment CATEGORY suggestion."""
+    if "image" not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
+
+    f = request.files["image"]
+    image_bytes = f.read() or b""
+    if not image_bytes:
+        return jsonify({"error": "Empty image"}), 400
+
+    mime = f.mimetype or "image/jpeg"
+    # reuse the same best-effort preprocessing as other scans
+    try:
+        pre = _preprocess_for_vision(image_bytes)
+    except Exception:
+        pre = image_bytes
+
+    # base64 encode
+    import base64
+    b64 = base64.b64encode(pre).decode("ascii")
+
+    result = _openai_identify_equipment_from_image(b64, mime_type=mime)
+    if result.get("error"):
+        return jsonify(result), 400
+
+    # Persist scan (for future training / analytics)
+    try:
+        db = get_session(db_url)
+        try:
+            scan = EquipmentScan(
+                user_id=current_user.id,
+                image_sha=_fingerprint_bytes(image_bytes),
+                predicted_category=result.get("category"),
+                confidence=float(result.get("confidence") or 0),
+                alternatives_json=json.dumps(result.get("alternatives") or []),
+                notes=(result.get("notes") or "")[:300],
+            )
+            db.add(scan)
+            db.commit()
+            scan_id = scan.id
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to save equipment scan")
+        scan_id = None
+
+    return jsonify({
+        "scan_id": scan_id,
+        "category": result.get("category"),
+        "confidence": result.get("confidence"),
+        "alternatives": result.get("alternatives") or [],
+        "notes": result.get("notes") or "",
+        "categories": _EQUIPMENT_CATEGORIES,
+    })
+
+@app.route("/log-workout", methods=["POST"])
+@login_required
+def log_workout():
+    """Create a workout log entry from the scan page."""
+    cat = _coerce_equipment_category(request.form.get("equipment_category"))
+    exercise_name = (request.form.get("exercise_name") or "").strip()[:120] or None
+    notes = (request.form.get("notes") or "").strip()[:300] or None
+
+    def _to_int(v):
+        try:
+            v = (v or "").strip()
+            return int(v) if v else None
+        except Exception:
+            return None
+
+    def _to_float(v):
+        try:
+            v = (v or "").strip()
+            return float(v) if v else None
+        except Exception:
+            return None
+
+    sets = _to_int(request.form.get("sets"))
+    reps = _to_int(request.form.get("reps"))
+    weight = _to_float(request.form.get("weight"))
+
+    try:
+        db = get_session(db_url)
+        try:
+            row = WorkoutLog(
+                user_id=current_user.id,
+                equipment_category=cat,
+                exercise_name=exercise_name,
+                sets=sets,
+                reps=reps,
+                weight=weight,
+                notes=notes,
+            )
+            db.add(row)
+            db.commit()
+        finally:
+            db.close()
+        flash("Workout logged ✅", "success")
+    except Exception:
+        app.logger.exception("Failed to save workout log")
+        flash("Could not save workout log. Please try again.", "danger")
+
+    return redirect(url_for("training_log"))
+
+@app.route("/training", methods=["GET"])
+@login_required
+def training_log():
+    """Simple training log list (MVP)."""
+    rows = []
+    try:
+        db = get_session(db_url)
+        try:
+            q = db.query(WorkoutLog).filter(WorkoutLog.user_id == current_user.id).order_by(WorkoutLog.performed_at.desc()).limit(50)
+            rows = q.all()
+        finally:
+            db.close()
+    except Exception:
+        app.logger.exception("Failed to load workout logs")
+        rows = []
+    return render_template("training_log.html", rows=rows, categories=_EQUIPMENT_CATEGORIES)
 
 @app.route("/api/scan-peptide-label", methods=["POST"])
 @login_required
